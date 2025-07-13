@@ -1,0 +1,43 @@
+{
+  "name": "wp",
+  "displayName": "Web Pipe",
+  "description": "Web Pipe",
+  "version": "0.0.1",
+  "publisher": "williamcotton",
+  "author": {
+    "name": "William Cotton",
+    "email": "williamcotton@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/williamcotton/webpipe"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "webpipe",
+      "aliases": ["Web Pipe", "webpipe"],
+      "extensions": [".wp"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "webpipe",
+      "scopeName": "source.webpipe",
+      "path": "./syntaxes/webpipe.tmLanguage.json",
+      "embeddedLanguages": {
+        "meta.embedded.block.html": "html",
+        "meta.embedded.block.css": "css",
+        "meta.embedded.block.sql": "sql",
+        "meta.embedded.block.jq": "jq",
+        "meta.embedded.block.lua": "lua",
+        "meta.embedded.block.mustache": "mustache"
+      }
+    }]
+  }
+}
