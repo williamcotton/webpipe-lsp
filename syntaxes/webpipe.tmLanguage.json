@@ -241,7 +241,7 @@
               "name": "entity.name.function.middleware.mustache.webpipe"
             }
           },
-          "end": "`|$",
+          "end": "`",
           "name": "meta.embedded.mustache.webpipe",
           "contentName": "text.html.mustache",
           "patterns": [
@@ -390,11 +390,15 @@
         {
           "name": "meta.tag.mustache.triple",
           "begin": "\\{\\{\\{",
-          "end": "(\\}\\}\\}|`|\\n|$)",
-          "applyEndPatternLast": true,
-          "captures": {
+          "end": "(\\}\\}\\}|(?=`))",
+          "beginCaptures": {
             "0": {
-              "name": "punctuation.definition.tag.mustache"
+              "name": "punctuation.definition.tag.begin.mustache"
+            }
+          },
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.definition.tag.end.mustache"
             }
           },
           "contentName": "variable.other.mustache"
@@ -402,11 +406,15 @@
         {
           "name": "meta.tag.mustache",
           "begin": "\\{\\{",
-          "end": "(\\}\\}|`|\\n|$)",
-          "applyEndPatternLast": true,
-          "captures": {
+          "end": "(\\}\\}|(?=`))",
+          "beginCaptures": {
             "0": {
-              "name": "punctuation.definition.tag.mustache"
+              "name": "punctuation.definition.tag.begin.mustache"
+            }
+          },
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.definition.tag.end.mustache"
             }
           },
           "patterns": [
