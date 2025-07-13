@@ -334,7 +334,12 @@
         {
           "name": "string.quoted.double.jq",
           "begin": "\"",
-          "end": "\"",
+          "end": "(\"|(?=`))",
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.definition.string.end.jq"
+            }
+          },
           "patterns": [
             {
               "name": "constant.character.escape.jq",
@@ -369,7 +374,7 @@
         {
           "name": "meta.brackets.jq",
           "begin": "\\[",
-          "end": "\\]",
+          "end": "(\\]|(?=`))",
           "patterns": [
             {
               "include": "#jq-embedded"
@@ -379,7 +384,7 @@
         {
           "name": "meta.braces.jq",
           "begin": "\\{",
-          "end": "\\}",
+          "end": "(\\}|(?=`))",
           "patterns": [
             {
               "include": "#jq-embedded"
