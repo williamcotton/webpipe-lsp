@@ -10,6 +10,9 @@
       "include": "#comments"
     },
     {
+      "include": "#config-definition"
+    },
+    {
       "include": "#route-definition"
     },
     {
@@ -22,6 +25,28 @@
         {
           "name": "comment.line.number-sign.webpipe",
           "match": "#.*$"
+        }
+      ]
+    },
+    "config-definition": {
+      "patterns": [
+        {
+          "begin": "^\\s*(config)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\{",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.config.webpipe"
+            },
+            "2": {
+              "name": "entity.name.type.config.webpipe"
+            }
+          },
+          "end": "\\}",
+          "name": "meta.config-block.webpipe",
+          "patterns": [
+            {
+              "include": "#config-content"
+            }
+          ]
         }
       ]
     },
@@ -506,6 +531,55 @@
               "name": "constant.numeric.max.validate"
             }
           }
+        }
+      ]
+    },
+    "config-content": {
+      "patterns": [
+        {
+          "match": "^\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*:",
+          "captures": {
+            "1": {
+              "name": "variable.parameter.config-key.webpipe"
+            }
+          }
+        },
+        {
+          "name": "variable.other.environment.webpipe",
+          "match": "\\$[a-zA-Z_][a-zA-Z0-9_]*"
+        },
+        {
+          "name": "keyword.operator.fallback.webpipe",
+          "match": "\\|\\|"
+        },
+        {
+          "name": "string.quoted.double.webpipe",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.webpipe",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "constant.language.boolean.webpipe",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.numeric.webpipe",
+          "match": "\\b[0-9]+\\.?[0-9]*\\b"
+        },
+        {
+          "name": "meta.object.config.webpipe",
+          "begin": "\\{",
+          "end": "\\}",
+          "patterns": [
+            {
+              "include": "#config-content"
+            }
+          ]
         }
       ]
     },
