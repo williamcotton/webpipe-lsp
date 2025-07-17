@@ -301,7 +301,7 @@
           ]
         },
         {
-          "match": "\\s*(\\|>)\\s*(jq|lua|pg|mustache|validate):\\s*([a-zA-Z_][a-zA-Z0-9_]*)(?!\\s*`)",
+          "match": "\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_]*):\\s*([a-zA-Z_][a-zA-Z0-9_]*)(?!\\s*`)",
           "captures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
@@ -311,6 +311,20 @@
             },
             "3": {
               "name": "variable.other.webpipe"
+            }
+          }
+        },
+        {
+          "match": "\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_]*):\\s*\"([^\"]+)\"",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.pipe.webpipe"
+            },
+            "2": {
+              "name": "entity.name.function.middleware.webpipe"
+            },
+            "3": {
+              "name": "string.quoted.double.webpipe"
             }
           }
         }

@@ -11,6 +11,7 @@ GET /hello
   |> jq: `{ world: ":)"}`
 
 GET /page/:id
+  |> auth: "required"
   |> jq: `{ sqlParams: [.params.id | tostring] }`
   |> pg: `SELECT * FROM teams WHERE id = $1`
   |> jq: `{ team: .data.rows[0] }`
