@@ -80,6 +80,24 @@
     "variable-assignment": {
       "patterns": [
         {
+          "begin": "^\\s*(pipeline)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*=",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.pipeline.webpipe"
+            },
+            "2": {
+              "name": "variable.other.assignment.webpipe"
+            }
+          },
+          "end": "^(?=\\S|$)",
+          "name": "meta.variable-assignment.pipeline.webpipe",
+          "patterns": [
+            {
+              "include": "#pipeline-steps"
+            }
+          ]
+        },
+        {
           "begin": "^\\s*(jq)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*=\\s*`",
           "beginCaptures": {
             "1": {
