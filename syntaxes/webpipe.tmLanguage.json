@@ -17,6 +17,12 @@
     },
     {
       "include": "#variable-assignment"
+    },
+    {
+      "include": "#test-spec-keywords"
+    },
+    {
+      "include": "#backtick-json"
     }
   ],
   "repository": {
@@ -529,7 +535,7 @@
           "patterns": [
             {
               "name": "constant.character.escape.sql",
-              "match": "\\\\.\"|\"\"" 
+              "match": "\\\\.\"|\"\""
             }
           ]
         }
@@ -621,6 +627,44 @@
           "patterns": [
             {
               "include": "#config-content"
+            }
+          ]
+        }
+      ]
+    },
+    "test-spec-keywords": {
+      "patterns": [
+        {
+          "match": "\\b(describe|it)\\s+(\"[^\"]*\")",
+          "captures": {
+            "1": {
+              "name": "keyword.control.bdd.webpipe"
+            },
+            "2": {
+              "name": "string.quoted.double.webpipe"
+            }
+          }
+        },
+        {
+          "name": "keyword.control.bdd.webpipe",
+          "match": "\\b(describe|it|with|when|then|and)\\b"
+        },
+        {
+          "name": "keyword.control.bdd.helper.webpipe",
+          "match": "\\b(executing|calling|input|output|equals|status|mock|returning)\\b"
+        }
+      ]
+    },
+    "backtick-json": {
+      "patterns": [
+        {
+          "begin": "`",
+          "end": "`",
+          "name": "meta.embedded.json.webpipe",
+          "contentName": "source.json",
+          "patterns": [
+            {
+              "include": "source.json"
             }
           ]
         }
