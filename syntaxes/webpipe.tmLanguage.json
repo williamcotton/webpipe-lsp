@@ -77,6 +77,9 @@
           "end": "^(?!\\s*\\|>)(?=\\S|$)",
           "patterns": [
             {
+              "include": "#comments"
+            },
+            {
               "include": "#pipeline-steps"
             }
           ]
@@ -98,6 +101,9 @@
           "end": "^(?!\\s*\\|>)(?=\\S|$)",
           "name": "meta.variable-assignment.pipeline.webpipe",
           "patterns": [
+            {
+              "include": "#comments"
+            },
             {
               "include": "#pipeline-steps"
             }
@@ -205,6 +211,9 @@
     },
     "pipeline-steps": {
       "patterns": [
+        {
+          "include": "#comments"
+        },
         {
           "include": "#middleware-step"
         },
@@ -399,6 +408,9 @@
           },
           "end": "^(?=\\s*[a-zA-Z]+\\(\\d+\\):|^(?!\\s*\\|>)\\S|$)",
           "patterns": [
+            {
+              "include": "#comments"
+            },
             {
               "include": "#pipeline-steps"
             }
