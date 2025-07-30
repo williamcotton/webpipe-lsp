@@ -74,7 +74,7 @@
               ]
             }
           },
-          "end": "^(?=\\S|$)",
+          "end": "^(?!\\s*\\|>)(?=\\S|$)",
           "patterns": [
             {
               "include": "#pipeline-steps"
@@ -95,7 +95,7 @@
               "name": "variable.other.assignment.webpipe"
             }
           },
-          "end": "^(?=\\S|$)",
+          "end": "^(?!\\s*\\|>)(?=\\S|$)",
           "name": "meta.variable-assignment.pipeline.webpipe",
           "patterns": [
             {
@@ -217,9 +217,12 @@
       ]
     },
     "pipeline-operator": {
-      "match": "\\s*(\\|>)",
+      "match": "^\\s*(\\|>)|(?<=\\s)(\\|>)",
       "captures": {
         "1": {
+          "name": "keyword.operator.pipe.webpipe"
+        },
+        "2": {
           "name": "keyword.operator.pipe.webpipe"
         }
       }
@@ -227,7 +230,7 @@
     "middleware-step": {
       "patterns": [
         {
-          "begin": "\\s*(\\|>)\\s*(jq):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(jq):\\s*`",
           "beginCaptures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
@@ -246,7 +249,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(lua):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(lua):\\s*`",
           "beginCaptures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
@@ -265,7 +268,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(pg):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(pg):\\s*`",
           "beginCaptures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
@@ -287,7 +290,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(mustache):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(mustache):\\s*`",
           "beginCaptures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
@@ -306,7 +309,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(validate):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(validate):\\s*`",
           "beginCaptures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
@@ -325,7 +328,7 @@
           ]
         },
         {
-          "match": "\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_]*):\\s*`",
+          "match": "^\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_]*):\\s*`",
           "captures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
@@ -336,7 +339,7 @@
           }
         },
         {
-          "match": "\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_]*):\\s*([a-zA-Z_][a-zA-Z0-9_]*)(?!\\s*`)",
+          "match": "^\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_]*):\\s*([a-zA-Z_][a-zA-Z0-9_]*)(?!\\s*`)",
           "captures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
@@ -350,7 +353,7 @@
           }
         },
         {
-          "match": "\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_]*):\\s*\"([^\"]+)\"",
+          "match": "^\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_]*):\\s*\"([^\"]+)\"",
           "captures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
@@ -366,7 +369,7 @@
       ]
     },
     "result-step": {
-      "begin": "\\s*(\\|>)\\s*(result)\\s*$",
+      "begin": "^\\s*(\\|>)\\s*(result)\\s*$",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.pipe.webpipe"
@@ -375,7 +378,7 @@
           "name": "keyword.control.result.webpipe"
         }
       },
-      "end": "^(?=\\S|$)",
+      "end": "^(?!\\s*[a-zA-Z]+\\(\\d+\\):)(?!\\s*\\|>)(?=\\S|$)",
       "patterns": [
         {
           "include": "#result-conditions"
@@ -394,7 +397,7 @@
               "name": "constant.numeric.status-code.webpipe"
             }
           },
-          "end": "^(?=\\s*[a-zA-Z]+\\(\\d+\\):|^\\S|$)",
+          "end": "^(?=\\s*[a-zA-Z]+\\(\\d+\\):|^(?!\\s*\\|>)\\S|$)",
           "patterns": [
             {
               "include": "#pipeline-steps"
