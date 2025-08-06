@@ -23,6 +23,9 @@
     },
     {
       "include": "#backtick-json"
+    },
+    {
+      "include": "#triple-quote-strings"
     }
   ],
   "repository": {
@@ -181,6 +184,25 @@
           },
           "end": "`",
           "name": "meta.variable-assignment.mustache.webpipe",
+          "contentName": "text.html.mustache",
+          "patterns": [
+            {
+              "include": "#mustache-embedded"
+            }
+          ]
+        },
+        {
+          "begin": "^\\s*(mustache)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*=\\s*\"\"\"",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.middleware.webpipe"
+            },
+            "2": {
+              "name": "variable.other.assignment.webpipe"
+            }
+          },
+          "end": "\"\"\"",
+          "name": "meta.variable-assignment.mustache.triple.webpipe",
           "contentName": "text.html.mustache",
           "patterns": [
             {
@@ -680,6 +702,21 @@
           "patterns": [
             {
               "include": "source.json"
+            }
+          ]
+        }
+      ]
+    },
+    "triple-quote-strings": {
+      "patterns": [
+        {
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "name": "string.quoted.triple.webpipe",
+          "patterns": [
+            {
+              "name": "variable.other.webpipe",
+              "match": "\\.[a-zA-Z_][a-zA-Z0-9_]*"
             }
           ]
         }

@@ -26,11 +26,24 @@ export default function(hljs) {
 
       // ────────────────────────────────────────────────
       //  NEW: middleware keyword in *variable assignment*
-      //       e.g.  pg pageQuery = `…`
+      //       e.g.  pg pageQuery = `…` or mustache template = """…"""
       // ────────────────────────────────────────────────
       {
         scope: 'keyword',
         match: '^\\s*[a-zA-Z_][a-zA-Z0-9_]*(?=\\s+[a-zA-Z_][a-zA-Z0-9_]*\\s*=)'
+      },
+
+      // Mustache embedded content with triple quotes
+      {
+        begin: '\\bmustache\\s+[a-zA-Z_][a-zA-Z0-9_]*\\s*=\\s*\\"\\"\\"\\"',
+        end: '\\"\\"\\"\\"',
+        subLanguage: 'xml',
+        contains: [
+          {
+            scope: 'variable',
+            match: '\\{\\{[^}]+\\}\\}'
+          }
+        ]
       },
 
       // Pipeline operator
@@ -88,6 +101,19 @@ export default function(hljs) {
         begin: '\\bpg:\\s*`',
         end: '`',
         subLanguage: 'sql'
+      },
+
+      // Triple double-quote strings
+      {
+        scope: 'string',
+        begin: '\\"\\"\\"\\"',
+        end: '\\"\\"\\"\\"',
+        contains: [
+          {
+            scope: 'variable',
+            match: '\\.[a-zA-Z_][a-zA-Z0-9_]*'
+          }
+        ]
       },
 
       // Generic back‑tick strings
