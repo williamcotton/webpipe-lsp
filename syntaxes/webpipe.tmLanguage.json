@@ -22,6 +22,9 @@
       "include": "#test-spec-keywords"
     },
     {
+      "include": "#assertion-output-jq"
+    },
+    {
       "include": "#backtick-json"
     },
     {
@@ -726,7 +729,24 @@
         },
         {
           "name": "keyword.control.bdd.helper.webpipe",
-          "match": "\\b(executing|calling|input|output|equals|status|mock|returning)\\b"
+          "match": "\\b(executing|calling|input|output|equals|contains|matches|in|status|mock|returning)\\b"
+        }
+      ]
+    },
+    "assertion-output-jq": {
+      "patterns": [
+        {
+          "begin": "^\\s*(then|and)\\s+(output)\\s*`",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.bdd.webpipe" },
+            "2": { "name": "keyword.control.bdd.helper.webpipe" }
+          },
+          "end": "`",
+          "name": "meta.assertion.output.jq.webpipe",
+          "contentName": "source.jq",
+          "patterns": [
+            { "include": "#jq-embedded" }
+          ]
         }
       ]
     },

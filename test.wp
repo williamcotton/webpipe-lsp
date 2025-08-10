@@ -1,5 +1,35 @@
 # Test App
 
+GET /hello/:world
+  |> jq: `{ world: .params.world }`
+  |> handlebars: `<p>hello, {{world}}</p>`
+
+describe "hello, world"
+  it "calls the route"
+    when calling GET /hello/world
+    then status is 200
+    and output equals `<p>hello, world</p>`
+
+GET /lua/:id/example
+  |> lua: `
+    local id = request.params.id
+    local name = request.query.name
+    return {
+      message = "Hello from Lua!",
+      id = id,
+      name = name
+    }
+  `
+describe "lua"
+  it "calls the route"
+    when calling GET /lua/123/example?name=example
+    then status is 200
+    and output equals `{
+      "message": "Hello from Lua!",
+      "id": 123,
+      "name": "example"
+    }`
+
 ## Config
 config pg {
   host: $WP_PG_HOST || "localhost"
@@ -23,8 +53,16 @@ config auth {
 
 ## Tests
 
+GET /test-lua-env
+  |> lua: `
+    local env = getEnv("WP_PG_USER")
+    return {
+      env = env
+    }
+  `
+
 pipeline getTeams =
-  |> jq: `{ sqlParams: [.params.id | tostring] }`
+  |> jq: `{ sqlParams: [.params.id] }`
   |> pg: `SELECT * FROM teams WHERE id = $1`
 
 GET /hello
@@ -76,11 +114,17 @@ describe "getTeams pipeline"
 
   it "handles string id parameter"
     when executing pipeline getTeams
-    with input `{ "params": { "id": "42" } }`
-    and mock pg returning `{ "rows": [{ "id": "42", "name": "Marketing" }] }`
+    with input `{ "params": { "id": 42 } }`
+    and mock pg returning `{ "rows": [{ "id": 42, "name": "Marketing" }] }`
     then output equals `{
-      "rows": [{ "id": "42", "name": "Marketing" }]
+      "rows": [{ "id": 42, "name": "Marketing" }]
     }`
+
+  it "supports jq equals on output subpath"
+    when executing pipeline getTeams
+    with input `{ "params": { "id": 42 } }`
+    and mock pg returning `{ "rows": [{ "id": 42, "name": "Marketing" }] }`
+    then output `.rows[0].id` equals 42
 
 describe "test calling route"
   it "calls the route"
@@ -89,6 +133,25 @@ describe "test calling route"
     and output equals `{
       "hello": "world"
     }`
+
+describe "jq assertions"
+  it "supports output contains for partial JSON"
+    when calling GET /hello
+    then output contains `{ "hello": "world" }`
+
+  it "supports output matches for HTML"
+    when calling GET /hello/world
+    then output matches `^<p>hello, .*</p>$`
+
+  it "supports status ranges"
+    when calling GET /hello
+    then status in 200..299
+
+  it "supports jq filter with map"
+    when executing pipeline getTeams
+    with input `{ "params": { "id": 2 } }`
+    and mock pg returning `{ "rows": [{ "id": 2, "name": "Growth" }, { "id": 3, "name": "Security" }] }`
+    then output `.rows | map(.id)` equals `[2, 3]`
 
 GET /test
   |> jq: `.`
@@ -263,9 +326,9 @@ PATCH /test-body
     hasBody: (.body != null)
   }`
 
-GET /hello-mustache
-  |> jq: `{ name: "World", message: "Hello from mustache!" }`
-  |> mustache: `
+GET /hello-handlebars
+  |> jq: `{ name: "World", message: "Hello from handlebars!" }`
+  |> handlebars: `
     <html>
       <head>
         <title>{{message}}</title>
@@ -277,176 +340,30 @@ GET /hello-mustache
     </html>
   `
 
-GET /mustache-error-test
+GET /handlebars-error-test
   |> jq: `{ invalid: "data" }`
-  |> mustache: `{{syntax_error`
+  |> handlebars: `{{syntax_error`
 
-mustache cardPartial = `
+handlebars cardPartial = `
   <div class="card">
     <h3>{{title}}</h3>
     <p>{{description}}</p>
   </div>
 `
 
-mustache headerPartial = `
+handlebars headerPartial = `
   <header>
     <h1>{{siteName}}</h1>
     <nav>{{>navPartial}}</nav>
   </header>
 `
 
-mustache navPartial = `
+handlebars navPartial = `
   <ul>
     <li><a href="/">Home</a></li>
     <li><a href="/about">About</a></li>
   </ul>
 `
-
-mustache highlightJsScript = """
-<script>
-// Register WebPipe language definition
-hljs.registerLanguage('webpipe', function(hljs) {
-  return {
-    name: 'WebPipe',
-    case_insensitive: false,
-    contains: [
-      // Comments
-      hljs.HASH_COMMENT_MODE,
-
-      // HTTP Methods
-      {
-        scope: 'keyword',
-        match: '\\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\\b'
-      },
-
-      // Config / pipeline keywords
-      {
-        scope: 'keyword',
-        match: '\\b(config|pipeline)\\b'
-      },
-
-      // ────────────────────────────────────────────────
-      //  NEW: middleware keyword in *variable assignment*
-      //       e.g.  pg pageQuery = `…`
-      // ────────────────────────────────────────────────
-      {
-        scope: 'keyword',
-        match: '^\\s*[a-zA-Z_][a-zA-Z0-9_]*(?=\\s+[a-zA-Z_][a-zA-Z0-9_]*\\s*=)'
-      },
-
-      // Pipeline operator
-      {
-        scope: 'operator',
-        match: '\\|>'
-      },
-
-      // Middleware functions in pipelines (word before colon)
-      {
-        scope: 'keyword',
-        match: '\\b[a-zA-Z_][a-zA-Z0-9_]*(?=\\s*:)'
-      },
-
-      // Route paths
-      {
-        scope: 'string',
-        match: '/[^\\s]*',
-        contains: [
-          {
-            scope: 'variable',
-            match: ':[a-zA-Z_][a-zA-Z0-9_]*'
-          }
-        ]
-      },
-
-      // Lua embedded content
-      {
-        begin: '\\blua:\\s*`',
-        end: '`',
-        subLanguage: 'lua',
-        contains: [
-          {
-            scope: 'variable',
-            match: 'request\\.[a-zA-Z_][a-zA-Z0-9_]*'
-          }
-        ]
-      },
-
-      // JQ embedded content
-      {
-        begin: '\\bjq:\\s*`',
-        end: '`',
-        subLanguage: 'json',
-        contains: [
-          {
-            scope: 'variable',
-            match: '\\.[a-zA-Z_][a-zA-Z0-9_]*'
-          }
-        ]
-      },
-
-      // SQL embedded content
-      {
-        begin: '\\bpg:\\s*`',
-        end: '`',
-        subLanguage: 'sql'
-      },
-
-      // Generic back‑tick strings
-      {
-        scope: 'string',
-        begin: '`',
-        end: '`',
-        contains: [
-          {
-            scope: 'variable',
-            match: '\\.[a-zA-Z_][a-zA-Z0-9_]*'
-          },
-          hljs.QUOTE_STRING_MODE
-        ]
-      },
-
-      // Regular quoted strings
-      hljs.QUOTE_STRING_MODE,
-
-      // Numbers
-      hljs.C_NUMBER_MODE,
-
-      // Environment variables
-      {
-        scope: 'variable',
-        match: '\\$[a-zA-Z_][a-zA-Z0-9_]*'
-      },
-
-      // Boolean literals
-      {
-        scope: 'literal',
-        match: '\\b(true|false)\\b'
-      },
-
-      // BDD test keywords with quoted strings
-      {
-        begin: '\\b(describe|it)\\s+',
-        beginScope: 'keyword',
-        end: '$',
-        contains: [
-          {
-            scope: 'string',
-            match: '"[^"]*"'
-          }
-        ]
-      },
-
-      // Other BDD keywords
-      {
-        scope: 'keyword',
-        match: '\\b(with|when|then|and|executing|calling|input|output|equals|status|mock|returning)\\b'
-      }
-    ]
-  };
-});
-hljs.highlightAll();
-</script>
-"""
 
 GET /test-partials
   |> jq: `{ 
@@ -454,7 +371,7 @@ GET /test-partials
     description: "This is a test card",
     siteName: "My Website"
   }`
-  |> mustache: `
+  |> handlebars: `
     <html>
       <head>
         <title>{{siteName}}</title>
@@ -470,7 +387,7 @@ GET /test-partials
 
 GET /test-missing-partial
   |> jq: `{ title: "Test" }`
-  |> mustache: `
+  |> handlebars: `
     <html>
       <body>
         {{>nonexistentPartial}}
@@ -478,7 +395,7 @@ GET /test-missing-partial
     </html>
   `
 
-GET /test-sql-error-mustache
+GET /test-sql-error-handlebars
   |> jq: `{ sqlParams: [] }`
   |> pg: `SELECT * FROM nonexistent_table`
   |> result
@@ -491,10 +408,10 @@ GET /test-sql-error-mustache
         message: .errors[0].message,
         query: .errors[0].query
       }`
-      |> mustache: `{{error}}`
+      |> handlebars: `{{error}}`
     default(500):
       |> jq: `{error: "Internal server error"}`
-      |> mustache: `{{error}}`
+      |> handlebars: `{{error}}`
 
 GET /cookies
   |> jq: `{
@@ -667,43 +584,52 @@ GET /api/users/:id
 
 ## Todos App
 
-mustache baseLayout = `
+# Default partials to avoid missing-partial errors and enable overrides
+handlebars title = `Default Title`
+handlebars headExtras = ``
+handlebars content = `Default content`
+handlebars footerScripts = ``
+handlebars pageTitle = `Page Title`
+handlebars pageContent = ``
+handlebars authHeader = ``
+
+handlebars baseLayout = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{$title}}Default Title{{/title}}</title>
+  <title>{{> title}}</title>
   <script src="https://unpkg.com/htmx.org@1.9.10"></script>
   <script src="https://cdn.tailwindcss.com"></script>
-  {{$headExtras}}{{/headExtras}}
+  {{> headExtras}}
 </head>
 <body class="bg-gray-100 font-sans">
-  {{$content}}Default content{{/content}}
-  {{$footerScripts}}{{/footerScripts}}
+  {{> content}}
+  {{> footerScripts}}
 </body>
 </html>
 `
 
-mustache authLayout = `
-{{<baseLayout}}
-  {{$content}}
-    <div class="max-w-4xl mx-auto p-6">
-      <div class="bg-white p-6 rounded-lg shadow-md">
-        {{$authHeader}}
-          <div class="flex justify-between items-center border-b-2 border-blue-500 pb-3 mb-6">
-            <h1 class="text-3xl font-bold text-gray-800">{{$pageTitle}}Page Title{{/pageTitle}}</h1>
-            <div class="flex items-center space-x-4">
-              <span class="text-gray-600">Welcome, {{user.login}}!</span>
-              <button hx-post="/logout" hx-swap="none" hx-on::after-request="window.location.href='/login-page'" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors">Logout</button>
-            </div>
-          </div>
-        {{/authHeader}}
-        {{$pageContent}}Page content goes here{{/pageContent}}
-      </div>
+handlebars authLayout = `
+{{#*inline "authHeader"}}
+  <div class="flex justify-between items-center border-b-2 border-blue-500 pb-3 mb-6">
+    <h1 class="text-3xl font-bold text-gray-800">{{> pageTitle}}</h1>
+    <div class="flex items-center space-x-4">
+      <span class="text-gray-600">Welcome, {{user.login}}!</span>
+      <button hx-post="/logout" hx-swap="none" hx-on::after-request="window.location.href='/login-page'" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors">Logout</button>
     </div>
-  {{/content}}
-{{/baseLayout}}
+  </div>
+{{/inline}}
+{{#*inline "content"}}
+  <div class="max-w-4xl mx-auto p-6">
+    <div class="bg-white p-6 rounded-lg shadow-md">
+      {{> authHeader}}
+      {{> pageContent}}
+    </div>
+  </div>
+{{/inline}}
+{{> baseLayout}}
 `
 POST /login
   |> validate: `{
@@ -730,7 +656,7 @@ POST /login
         field: .errors[0].context,
         message: .errors[0].message
       }`
-      |> mustache: `
+      |> handlebars: `
         <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4" role="alert">
           <strong class="font-bold">Validation Error:</strong>
           <span class="block sm:inline">{{message}}</span>
@@ -744,7 +670,7 @@ POST /login
         context: .errors[0].context,
         fullError: .errors[0]
       }`
-      |> mustache: `
+      |> handlebars: `
         <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4" role="alert">
           <strong class="font-bold">Login Failed:</strong>
           <span class="block sm:inline">{{message}}</span>
@@ -780,7 +706,7 @@ POST /register
         success: true,
         message: "Registration successful"
       }`
-      |> mustache: `
+      |> handlebars: `
         <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4" role="alert">
           <strong class="font-bold">Success!</strong>
           <span class="block sm:inline">Account created successfully. Redirecting to login...</span>
@@ -793,7 +719,7 @@ POST /register
         field: .errors[0].context,
         message: .errors[0].message
       }`
-      |> mustache: `
+      |> handlebars: `
         <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4" role="alert">
           <strong class="font-bold">Validation Error:</strong>
           <span class="block sm:inline">{{message}}</span>
@@ -805,7 +731,7 @@ POST /register
         error: "Registration failed",
         message: .errors[0].message
       }`
-      |> mustache: `
+      |> handlebars: `
         <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4" role="alert">
           <strong class="font-bold">Registration Failed:</strong>
           <span class="block sm:inline">{{message}}</span>
@@ -817,9 +743,8 @@ GET /login-page
     pageTitle: "Login - Todo App",
     message: "Please log in to access your todos"
   }`
-  |> mustache: `
-  {{<baseLayout}}
-    {{$content}}
+  |> handlebars: `
+  {{#*inline "content"}}
     <body class="bg-gray-100 font-sans">
       <div class="max-w-md mx-auto mt-20 p-6">
         <div class="bg-white p-8 rounded-lg shadow-md">
@@ -872,8 +797,9 @@ GET /login-page
           }
         });
       </script>
-    {{/content}}
-  {{/baseLayout}}
+    <!-- content -->
+  {{/inline}}
+  {{> baseLayout}}
   `
 
 GET /register-page
@@ -881,9 +807,8 @@ GET /register-page
     pageTitle: "Register - Todo App",
     message: "Create your account to get started"
   }`
-  |> mustache: `
-  {{<baseLayout}}
-    {{$content}}
+  |> handlebars: `
+  {{#*inline "content"}}
       <div class="max-w-md mx-auto mt-20 p-6">
         <div class="bg-white p-8 rounded-lg shadow-md">
           <div class="text-center mb-8">
@@ -939,14 +864,13 @@ GET /register-page
           }
         });
       </script>
-    {{/content}}
-  {{/baseLayout}}
+  {{/inline}}
+  {{> baseLayout}}
   `
 
-mustache loginRequiredLayout = `
-{{<baseLayout}}
-  {{$title}}Login Required{{/title}}
-  {{$content}}
+handlebars loginRequiredLayout = `
+{{#*inline "title"}}Login Required{{/inline}}
+{{#*inline "content"}}
     <div class="max-w-md mx-auto mt-20 p-6">
       <div class="bg-white p-8 rounded-lg shadow-md text-center">
         <div class="mb-6">
@@ -962,32 +886,31 @@ mustache loginRequiredLayout = `
         </div>
       </div>
     </div>
-  {{/content}}
-{{/baseLayout}}
+{{/inline}}
+{{> baseLayout}}
 `
 
-mustache errorAlert = `
+handlebars errorAlert = `
 <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 mt-4" role="alert">
-  <strong class="font-bold">{{$errorTitle}}Error{{/errorTitle}}:</strong>
-  <span class="block sm:inline">{{$errorMessage}}Something went wrong{{/errorMessage}}</span>
-</div>
+  <strong class="font-bold">{{> errorTitle}}:</strong>
+  <span class="block sm:inline">{{> errorMessage}}</span>
+  </div>
 `
 
 GET /todos
   |> auth: "required"
   |> result
     ok(200):
-      |> jq: `. + { sqlParams: [.user.id | tostring] }`
+      |> jq: `. + { sqlParams: [.user.id] }`
       |> pg: `SELECT id, title, completed, created_at, updated_at FROM todos WHERE user_id = $1 ORDER BY created_at DESC`
       |> jq: `. + {
         todos: .data.rows | map(. + {id: (.id | tostring)}),
         pageTitle: "Todo List"
       }`
-      |> mustache: `
-        {{<authLayout}}
-          {{$title}}{{pageTitle}}{{/title}}
-          {{$pageTitle}}{{pageTitle}} - {{user.login}}{{/pageTitle}}
-          {{$pageContent}}
+      |> handlebars: `
+        {{#*inline "title"}}{{pageTitle}}{{/inline}}
+        {{#*inline "pageTitle"}}{{pageTitle}} - {{user.login}}{{/inline}}
+        {{#*inline "pageContent"}}
             <div class="bg-gray-50 p-6 rounded-lg mb-6">
               <h3 class="text-lg font-semibold mb-4">Add New Todo</h3>
               <div id="form-errors"></div>
@@ -1002,20 +925,19 @@ GET /todos
             </div>
             
             <ul id="todo-list" class="space-y-3">
-              {{#todos}}
-              {{>todoItemPartial}}
-              {{/todos}}
-              {{^todos}}
-              <li class="text-center text-gray-500 italic py-10">
-                <p>No todos yet. Add your first todo above!</p>
-              </li>
-              {{/todos}}
+              {{#each todos}}
+                {{> todoItemPartial}}
+              {{else}}
+                <li class="text-center text-gray-500 italic py-10">
+                  <p>No todos yet. Add your first todo above!</p>
+                </li>
+              {{/each}}
             </ul>
-          {{/pageContent}}
-        {{/authLayout}}
+        {{/inline}}
+        {{> authLayout}}
       `
     authError(401):
-      |> mustache: `{{>loginRequiredLayout}}`
+      |> handlebars: `{{>loginRequiredLayout}}`
 
 POST /todos/add
   |> auth: "required"
@@ -1025,13 +947,13 @@ POST /todos/add
         title: string(3..30)
       `
       |> jq: `. + { 
-        sqlParams: [.body.title, false, .user.id | tostring]
+        sqlParams: [.body.title, false, .user.id]
       }`
       |> pg: `INSERT INTO todos (title, completed, user_id) VALUES ($1, $2, $3) RETURNING *`
       |> result
         ok(201):
           |> jq: `(.data.rows[0] | . + {id: (.id | tostring)})`
-          |> mustache: `
+          |> handlebars: `
             <div hx-swap-oob="afterbegin:#todo-list">
               {{>todoItemPartial}}
             </div>
@@ -1044,14 +966,13 @@ POST /todos/add
             rule: .errors[0].rule,
             message: .errors[0].message
           }`
-          |> mustache: `
-            {{<errorAlert}}
-              {{$errorTitle}}Validation Error{{/errorTitle}}
-              {{$errorMessage}}{{message}}{{/errorMessage}}
-            {{/errorAlert}}
+          |> handlebars: `
+            {{#*inline "errorTitle"}}Validation Error{{/inline}}
+            {{#*inline "errorMessage"}}{{message}}{{/inline}}
+            {{> errorAlert}}
           `
     authError(401):
-      |> mustache: `
+      |> handlebars: `
         {{<errorAlert}}
           {{$errorTitle}}Authentication Required{{/errorTitle}}
           {{$errorMessage}}Please log in to add todos.{{/errorMessage}}
@@ -1062,51 +983,48 @@ POST /todos/:id/toggle
   |> auth: "required"
   |> result
     ok(200):
-      |> jq: `{ sqlParams: [.params.id, .user.id | tostring], todoId: .params.id }`
+      |> jq: `{ sqlParams: [.params.id, .user.id], todoId: .params.id }`
       |> pg: `SELECT * FROM todos WHERE id = $1 AND user_id = $2`
       |> jq: `{ 
         sqlParams: [(.data.rows[0].completed | not), .todoId],
         currentTodo: .data.rows[0]
       }`
       |> pg: `UPDATE todos SET completed = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`
-      |> jq: `(.data.rows[0] | . + {id: (.id | tostring)})`
-      |> mustache: `{{>todoItemPartial}}`
+      |> jq: `.data.rows[0]`
+      |> handlebars: `{{> todoItemPartial}}`
     authError(401):
-      |> mustache: `
-        {{<errorAlert}}
-          {{$errorTitle}}Authentication Required{{/errorTitle}}
-          {{$errorMessage}}Please log in to modify todos.{{/errorMessage}}
-        {{/errorAlert}}
+       |> handlebars: `
+        {{#*inline "errorTitle"}}Authentication Required{{/inline}}
+        {{#*inline "errorMessage"}}Please log in to modify todos.{{/inline}}
+        {{> errorAlert}}
       `
 
 DELETE /todos/:id
   |> auth: "required"
   |> result
     ok(200):
-      |> jq: `{ sqlParams: [.params.id, .user.id | tostring] }`
+      |> jq: `{ sqlParams: [.params.id, .user.id] }`
       |> pg: `DELETE FROM todos WHERE id = $1 AND user_id = $2`
-      |> mustache: ``
+      |> handlebars: ``
     authError(401):
-      |> mustache: `
-        {{<errorAlert}}
-          {{$errorTitle}}Authentication Required{{/errorTitle}}
-          {{$errorMessage}}Please log in to delete todos.{{/errorMessage}}
-        {{/errorAlert}}
+       |> handlebars: `
+        {{#*inline "errorTitle"}}Authentication Required{{/inline}}
+        {{#*inline "errorMessage"}}Please log in to delete todos.{{/inline}}
+        {{> errorAlert}}
       `
 
-mustache todoItemPartial = `
-  <li class="{{#completed}}bg-green-50 border-l-4 border-green-400{{/completed}}{{^completed}}bg-gray-50 border-l-4 border-blue-400{{/completed}} p-4 rounded-lg flex justify-between items-start">
+handlebars todoItemPartial = `
+  <li class="{{#if completed}}bg-green-50 border-l-4 border-green-400{{else}}bg-gray-50 border-l-4 border-blue-400{{/if}} p-4 rounded-lg flex justify-between items-start">
     <div class="flex-1">
-      <div class="{{#completed}}text-gray-500 line-through{{/completed}}{{^completed}}text-gray-800 font-medium{{/completed}}">{{title}}</div>
+      <div class="{{#if completed}}text-gray-500 line-through{{else}}text-gray-800 font-medium{{/if}}">{{title}}</div>
       <div class="text-sm text-gray-500 mt-1">Created: {{created_at}}</div>
     </div>
     <div class="flex space-x-2 ml-4">
-      {{#completed}}
-      <button hx-post="/todos/{{id}}/toggle" hx-target="closest li" hx-swap="outerHTML" class="px-3 py-1 text-sm bg-gray-500 hover:bg-gray-600 text-white rounded transition-colors">Mark Incomplete</button>
-      {{/completed}}
-      {{^completed}}
-      <button hx-post="/todos/{{id}}/toggle" hx-target="closest li" hx-swap="outerHTML" class="px-3 py-1 text-sm bg-green-500 hover:bg-green-600 text-white rounded transition-colors">Mark Complete</button>
-      {{/completed}}
+      {{#if completed}}
+        <button hx-post="/todos/{{id}}/toggle" hx-target="closest li" hx-swap="outerHTML" class="px-3 py-1 text-sm bg-gray-500 hover:bg-gray-600 text-white rounded transition-colors">Mark Incomplete</button>
+      {{else}}
+        <button hx-post="/todos/{{id}}/toggle" hx-target="closest li" hx-swap="outerHTML" class="px-3 py-1 text-sm bg-green-500 hover:bg-green-600 text-white rounded transition-colors">Mark Complete</button>
+      {{/if}}
       <button hx-delete="/todos/{{id}}" hx-target="closest li" hx-swap="outerHTML" hx-confirm="Are you sure you want to delete this todo?" class="px-3 py-1 text-sm bg-red-500 hover:bg-red-600 text-white rounded transition-colors">Delete</button>
     </div>
   </li>
@@ -1149,31 +1067,6 @@ GET /test/auto-naming/:id
 GET /test/legacy/:id
   |> pg: `SELECT 1 as id, 'Legacy User' as name`
 
-# Test getEnv function
-
-GET /test-get-env
-  |> lua: `
-    local homeDir = getEnv("HOME")
-    local nonexistent = getEnv("NONEXISTENT_VAR")
-    local withDefault = getEnv("NONEXISTENT_VAR", "default_value")
-    local path = getEnv("PATH")
-    local dotenvVar = getEnv("TEST_DOTENV_VAR")
-    local contentfulSpace = getEnv("CONTENTFUL_SPACE")
-    local contentfulToken = getEnv("CONTENTFUL_ACCESS_TOKEN")
-    
-    return {
-      message = "getEnv function test including .env file support",
-      home = homeDir,
-      nonexistent = nonexistent,
-      withDefault = withDefault,
-      hasPath = (path ~= nil),
-      pathLength = path and string.len(path) or 0,
-      dotenvVar = dotenvVar,
-      hasContentfulSpace = (contentfulSpace ~= nil),
-      hasContentfulToken = (contentfulToken ~= nil)
-    }
-  `
-
 # Test Fetch Middleware
 
 ## Basic GET request
@@ -1212,774 +1105,3 @@ GET /test-fetch-error
 GET /test-fetch-timeout
   |> jq: `{ fetchTimeout: 1 }`
   |> fetch: `https://httpbin.org/delay/5`
-
-# Contentful Integration (Phase 2)
-
-## All blog articles (matching F# allArticles function)
-GET /contentful/articles
-  |> lua: `
-    local spaceId = getEnv("CONTENTFUL_SPACE")
-    local token = getEnv("CONTENTFUL_ACCESS_TOKEN")
-    
-    if not spaceId or not token then
-      return {
-        errors = {{
-          type = "configError",
-          message = "Missing Contentful configuration: CONTENTFUL_SPACE and CONTENTFUL_ACCESS_TOKEN required"
-        }}
-      }
-    end
-    
-    return {
-      fetchUrl = "https://cdn.contentful.com/spaces/" .. spaceId .. "/entries?content_type=blogPost&fields.hidden=false&order=-fields.publishedDate",
-      fetchHeaders = {
-        ["Authorization"] = "Bearer " .. token
-      }
-    }
-  `
-  |> fetch: `placeholder`
-  |> lua: `
-    if request.data and request.data.response then
-      local entries = request.data.response.items or {}
-      
-      -- Trim body content like the F# version (take first 4 content nodes)
-      local processedEntries = {}
-      for i, entry in ipairs(entries) do
-        local fields = entry.fields or {}
-        local body = fields.body or {}
-        local content = body.content or {}
-        
-        -- Take only first 4 content nodes for preview
-        local trimmedContent = {}
-        for j = 1, math.min(4, #content) do
-          table.insert(trimmedContent, content[j])
-        end
-        
-        local trimmedBody = {
-          content = trimmedContent,
-          nodeType = body.nodeType,
-          data = body.data
-        }
-        
-        local processedFields = {}
-        for k, v in pairs(fields) do
-          processedFields[k] = v
-        end
-        processedFields.body = trimmedBody
-        
-        table.insert(processedEntries, {
-          fields = processedFields,
-          sys = entry.sys
-        })
-      end
-      
-      return {
-        articles = processedEntries,
-        total = request.data.response.total or 0,
-        message = "Blog articles retrieved successfully"
-      }
-    else
-      return {
-        error = "Failed to fetch from Contentful",
-        details = request.data
-      }
-    end
-  `
-  |> mustache: `
-    <html>
-      <head>
-        <title>William Cotton - Blog Articles</title>
-        <style>
-          body { font-family: Georgia, serif; max-width: 1000px; margin: 0 auto; padding: 40px 20px; }
-          .article-list { display: grid; gap: 30px; }
-          .article-preview { border: 1px solid #ddd; padding: 25px; border-radius: 8px; }
-          .article-preview h2 { margin-top: 0; }
-          .article-meta { color: #666; font-size: 14px; margin: 15px 0; }
-          .read-more { color: #007acc; text-decoration: none; font-weight: bold; }
-          .read-more:hover { text-decoration: underline; }
-          .error { color: red; background: #ffe6e6; padding: 20px; border: 1px solid red; }
-        </style>
-      </head>
-      <body>
-        <header>
-          <h1>William Cotton - Blog</h1>
-          <p>{{total}} articles</p>
-        </header>
-        
-        {{#error}}
-          <div class="error">{{error}}</div>
-        {{/error}}
-        
-        <div class="article-list">
-          {{#articles}}
-            <article class="article-preview">
-              <h2><a href="/contentful/article/{{fields.slug}}" class="read-more">{{fields.title}}</a></h2>
-              <div class="article-meta">
-                Published: {{fields.publishedDate}}<br>
-                {{#fields.author}}Author: {{fields.author}}<br>{{/fields.author}}
-                {{#fields.tags}}Tags: {{fields.tags}}<br>{{/fields.tags}}
-              </div>
-              {{#fields.excerpt}}<p>{{fields.excerpt}}</p>{{/fields.excerpt}}
-              <a href="/contentful/article/{{fields.slug}}" class="read-more">Read More →</a>
-            </article>
-          {{/articles}}
-          {{^articles}}
-            <p>No articles found.</p>
-          {{/articles}}
-        </div>
-      </body>
-    </html>
-  `
-
-## Blog article by slug (matching F# article function)  
-GET /contentful/article/:slug
-  |> lua: `
-    local spaceId = getEnv("CONTENTFUL_SPACE")
-    local token = getEnv("CONTENTFUL_ACCESS_TOKEN")
-    local slug = request.params.slug
-    
-    if not spaceId or not token then
-      return {
-        errors = {{
-          type = "configError", 
-          message = "Missing Contentful configuration"
-        }}
-      }
-    end
-    
-    return {
-      fetchUrl = "https://cdn.contentful.com/spaces/" .. spaceId .. "/entries?content_type=blogPost&fields.slug[in]=" .. slug,
-      fetchHeaders = {
-        ["Authorization"] = "Bearer " .. token
-      }
-    }
-  `
-  |> fetch: `placeholder`
-  |> lua: `
-    if request.data and request.data.response and request.data.response.items then
-      local items = request.data.response.items
-      if #items > 0 then
-        local entry = items[1]
-        local fields = entry.fields or {}
-        
-        -- Enhanced rich text processing for blog posts with full Contentful support
-        local function escapeHtml(text)
-          if not text then return "" end
-          return text:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub("\"", "&quot;"):gsub("'", "&#39;")
-        end
-        
-        local function generateEntryUrl(target)
-          if not target or not target.fields then return "#" end
-          local contentType = target.sys and target.sys.contentType and target.sys.contentType.sys and target.sys.contentType.sys.id
-          local slug = target.fields.slug
-          
-          if contentType == "blogPost" and slug then
-            return "/contentful/article/" .. slug
-          elseif contentType == "page" and slug then
-            return "/contentful/page/" .. slug
-          else
-            return "#"
-          end
-        end
-        
-        local function renderTextWithMarks(textNode)
-          if not textNode or textNode.nodeType ~= "text" then return "" end
-          
-          local value = escapeHtml(textNode.value or "")
-          
-          if textNode.marks then
-            for _, mark in ipairs(textNode.marks) do
-              if mark.type == "bold" then
-                value = "<strong>" .. value .. "</strong>"
-              elseif mark.type == "italic" then
-                value = "<em>" .. value .. "</em>"
-              elseif mark.type == "code" then
-                value = "<code>" .. value .. "</code>"
-              elseif mark.type == "underline" then
-                value = "<u>" .. value .. "</u>"
-              end
-            end
-          end
-          
-          return value
-        end
-        
-        local function renderRichText(richTextObj, includes)
-          if not richTextObj or not richTextObj.content then
-            return ""
-          end
-          
-          -- Helper function to resolve entry references from includes
-          local function resolveEntry(entryId)
-            if not includes or not includes.Entry then return nil end
-            for _, entry in ipairs(includes.Entry) do
-              if entry.sys and entry.sys.id == entryId then
-                return entry
-              end
-            end
-            return nil
-          end
-          
-          local html = ""
-          for _, node in ipairs(richTextObj.content) do
-            
-            -- Handle embedded assets (images)
-            if node.nodeType == "embedded-asset-block" then
-              if node.data and node.data.target and node.data.target.fields then
-                local asset = node.data.target.fields
-                local url = asset.file and asset.file.url or ""
-                local title = asset.title or ""
-                local description = asset.description or title
-                
-                -- Ensure HTTPS URLs
-                if url:sub(1, 2) == "//" then
-                  url = "https:" .. url
-                end
-                
-                html = html .. string.format('<img src="%s" alt="%s" title="%s" class="embedded-asset" loading="lazy" />\n', 
-                                           escapeHtml(url), escapeHtml(description), escapeHtml(title))
-              end
-              
-            -- Handle embedded entries (code blocks, etc.)
-            elseif node.nodeType == "embedded-entry-block" then
-              if node.data and node.data.target and node.data.target.sys then
-                local entryId = node.data.target.sys.id
-                local resolvedEntry = resolveEntry(entryId)
-                
-                if resolvedEntry and resolvedEntry.fields then
-                  local contentType = resolvedEntry.sys and resolvedEntry.sys.contentType and resolvedEntry.sys.contentType.sys and resolvedEntry.sys.contentType.sys.id
-                  
-                  if (contentType == "codeBlock" or contentType == "codeSample") then
-                    local code = escapeHtml(resolvedEntry.fields.code or "")
-                    local lang = resolvedEntry.fields.lang or resolvedEntry.fields.language or "text"
-                    local filename = resolvedEntry.fields.filename and (" data-filename=\"" .. escapeHtml(resolvedEntry.fields.filename) .. "\"") or ""
-                    local title = resolvedEntry.fields.title and ("\n<!-- " .. escapeHtml(resolvedEntry.fields.title) .. " -->\n") or ""
-                    
-                    html = html .. title .. string.format('<pre class="code-block"><code class="language-%s"%s>%s</code></pre>\n', 
-                                                         escapeHtml(lang), filename, code)
-                  end
-                end
-              end
-              
-            -- Handle paragraphs with inline content
-            elseif node.nodeType == "paragraph" and node.content then
-              html = html .. "<p>"
-              for _, inline in ipairs(node.content) do
-                if inline.nodeType == "text" then
-                  html = html .. renderTextWithMarks(inline)
-                elseif inline.nodeType == "hyperlink" then
-                  local linkText = ""
-                  if inline.content then
-                    for _, linkContent in ipairs(inline.content) do
-                      linkText = linkText .. renderTextWithMarks(linkContent)
-                    end
-                  end
-                  local uri = inline.data and inline.data.uri or "#"
-                  html = html .. string.format('<a href="%s" target="_blank" rel="noopener noreferrer">%s</a>', 
-                                              escapeHtml(uri), linkText)
-                elseif inline.nodeType == "entry-hyperlink" then
-                  local linkText = ""
-                  if inline.content then
-                    for _, linkContent in ipairs(inline.content) do
-                      linkText = linkText .. renderTextWithMarks(linkContent)
-                    end
-                  end
-                  local target = inline.data and inline.data.target
-                  local href = generateEntryUrl(target)
-                  local title = target and target.fields and target.fields.title or ""
-                  
-                  html = html .. string.format('<a href="%s" title="%s">%s</a>', 
-                                              escapeHtml(href), escapeHtml(title), linkText)
-                elseif inline.nodeType == "asset-hyperlink" then
-                  local linkText = ""
-                  if inline.content then
-                    for _, linkContent in ipairs(inline.content) do
-                      linkText = linkText .. renderTextWithMarks(linkContent)
-                    end
-                  end
-                  local target = inline.data and inline.data.target
-                  local url = target and target.fields and target.fields.file and target.fields.file.url or "#"
-                  
-                  if url:sub(1, 2) == "//" then
-                    url = "https:" .. url
-                  end
-                  
-                  html = html .. string.format('<a href="%s" download>%s</a>', escapeHtml(url), linkText)
-                end
-              end
-              html = html .. "</p>\n"
-              
-            -- Handle headings
-            elseif node.nodeType == "heading-1" and node.content then
-              html = html .. "<h1>"
-              for _, textNode in ipairs(node.content) do
-                html = html .. renderTextWithMarks(textNode)
-              end
-              html = html .. "</h1>\n"
-            elseif node.nodeType == "heading-2" and node.content then
-              html = html .. "<h2>"
-              for _, textNode in ipairs(node.content) do
-                html = html .. renderTextWithMarks(textNode)
-              end
-              html = html .. "</h2>\n"
-            elseif node.nodeType == "heading-3" and node.content then
-              html = html .. "<h3>"
-              for _, textNode in ipairs(node.content) do
-                html = html .. renderTextWithMarks(textNode)
-              end
-              html = html .. "</h3>\n"
-            elseif node.nodeType == "heading-4" and node.content then
-              html = html .. "<h4>"
-              for _, textNode in ipairs(node.content) do
-                html = html .. renderTextWithMarks(textNode)
-              end
-              html = html .. "</h4>\n"
-            elseif node.nodeType == "heading-5" and node.content then
-              html = html .. "<h5>"
-              for _, textNode in ipairs(node.content) do
-                html = html .. renderTextWithMarks(textNode)
-              end
-              html = html .. "</h5>\n"
-            elseif node.nodeType == "heading-6" and node.content then
-              html = html .. "<h6>"
-              for _, textNode in ipairs(node.content) do
-                html = html .. renderTextWithMarks(textNode)
-              end
-              html = html .. "</h6>\n"
-              
-            -- Handle lists
-            elseif node.nodeType == "unordered-list" and node.content then
-              html = html .. "<ul>\n"
-              for _, listItem in ipairs(node.content) do
-                if listItem.nodeType == "list-item" and listItem.content then
-                  html = html .. "<li>"
-                  for _, itemContent in ipairs(listItem.content) do
-                    if itemContent.nodeType == "paragraph" and itemContent.content then
-                      for _, textNode in ipairs(itemContent.content) do
-                        html = html .. renderTextWithMarks(textNode)
-                      end
-                    else
-                      -- Recursively handle nested content
-                      html = html .. renderRichText(itemContent)
-                    end
-                  end
-                  html = html .. "</li>\n"
-                end
-              end
-              html = html .. "</ul>\n"
-            elseif node.nodeType == "ordered-list" and node.content then
-              html = html .. "<ol>\n"
-              for _, listItem in ipairs(node.content) do
-                if listItem.nodeType == "list-item" and listItem.content then
-                  html = html .. "<li>"
-                  for _, itemContent in ipairs(listItem.content) do
-                    if itemContent.nodeType == "paragraph" and itemContent.content then
-                      for _, textNode in ipairs(itemContent.content) do
-                        html = html .. renderTextWithMarks(textNode)
-                      end
-                    else
-                      html = html .. renderRichText(itemContent)
-                    end
-                  end
-                  html = html .. "</li>\n"
-                end
-              end
-              html = html .. "</ol>\n"
-              
-            -- Handle blockquotes
-            elseif node.nodeType == "blockquote" and node.content then
-              html = html .. "<blockquote>\n"
-              for _, quoteContent in ipairs(node.content) do
-                if quoteContent.nodeType == "paragraph" and quoteContent.content then
-                  html = html .. "<p>"
-                  for _, textNode in ipairs(quoteContent.content) do
-                    html = html .. renderTextWithMarks(textNode)
-                  end
-                  html = html .. "</p>\n"
-                else
-                  html = html .. renderRichText(quoteContent)
-                end
-              end
-              html = html .. "</blockquote>\n"
-              
-            -- Handle horizontal rule
-            elseif node.nodeType == "hr" then
-              html = html .. "<hr />\n"
-              
-            -- Handle table (basic support)
-            elseif node.nodeType == "table" and node.content then
-              html = html .. "<table>\n"
-              for _, row in ipairs(node.content) do
-                if row.nodeType == "table-row" and row.content then
-                  html = html .. "<tr>\n"
-                  for _, cell in ipairs(row.content) do
-                    if cell.nodeType == "table-cell" or cell.nodeType == "table-header-cell" then
-                      local tag = cell.nodeType == "table-header-cell" and "th" or "td"
-                      html = html .. "<" .. tag .. ">"
-                      if cell.content then
-                        for _, cellContent in ipairs(cell.content) do
-                          html = html .. renderRichText(cellContent)
-                        end
-                      end
-                      html = html .. "</" .. tag .. ">\n"
-                    end
-                  end
-                  html = html .. "</tr>\n"
-                end
-              end
-              html = html .. "</table>\n"
-            end
-          end
-          return html
-        end
-        
-        return {
-          title = fields.title or "Untitled",
-          bodyHtml = renderRichText(fields.body, request.data.response.includes),
-          slug = fields.slug or "",
-          publishedDate = fields.publishedDate or entry.sys.createdAt,
-          author = fields.author or "William Cotton",
-          excerpt = fields.excerpt or "",
-          tags = fields.tags or {},
-          seoDescription = fields.seoDescription or fields.excerpt or "",
-          contentType = entry.sys.contentType.sys.id,
-          found = true
-        }
-      else
-        return {
-          found = false,
-          message = "Article not found with slug: " .. slug
-        }
-      end
-    else
-      return {
-        error = "Failed to fetch article from Contentful",
-        slug = slug
-      }
-    end
-  `
-  |> mustache: `
-    <html>
-      <head>
-        <title>{{#found}}{{title}} - William Cotton{{/found}}{{^found}}Article Not Found{{/found}}</title>
-        {{#seoDescription}}<meta name="description" content="{{seoDescription}}">{{/seoDescription}}
-        <meta name="author" content="{{author}}">
-        <link rel="preload" href="https://williamcotton.com/LigaMenlo-Regular.woff" as="font" type="font/woff">
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css">
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
-        {{>highlightJsScript}}
-        <style>
-          @font-face {
-            font-family: 'LigaMenlo-Regular';
-            src: url('https://williamcotton.com/LigaMenlo-Regular.woff') format('woff');
-            font-display: swap;
-          }
-          body { font-family: Georgia, serif; max-width: 800px; margin: 0 auto; padding: 40px 20px; line-height: 1.6; }
-          .article-header { margin-bottom: 40px; }
-          .article-meta { color: #666; font-size: 14px; margin: 20px 0; }
-          .article-content { font-size: 18px; }
-          .article-content h1, .article-content h2, .article-content h3, .article-content h4, .article-content h5, .article-content h6 { 
-            margin-top: 40px; margin-bottom: 20px; color: #333; line-height: 1.3; 
-          }
-          .article-content h1 { font-size: 2.2em; }
-          .article-content h2 { font-size: 1.8em; }
-          .article-content h3 { font-size: 1.4em; }
-          .article-content h4 { font-size: 1.2em; }
-          .article-content h5 { font-size: 1.1em; }
-          .article-content h6 { font-size: 1em; font-weight: bold; }
-          .article-content blockquote { 
-            border-left: 4px solid #007acc; padding-left: 20px; margin: 30px 0; 
-            font-style: italic; background: #f8f9fa; padding: 20px; border-radius: 4px;
-          }
-          .article-content code { 
-            background: #f5f5f5; padding: 2px 6px; border-radius: 3px; 
-            font-family: 'LigaMenlo-Regular', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 0.9em; 
-          }
-          .article-content pre { 
-            background: #f8f9fa; padding: 20px; border-radius: 6px; 
-            overflow-x: auto; margin: 30px 0; border: 1px solid #e9ecef;
-          }
-          .article-content pre code { 
-            background: none; padding: 0; border-radius: 0; display: block;
-            font-size: 14px; line-height: 1.5;
-            font-family: 'LigaMenlo-Regular', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-          }
-          .article-content pre.code-block {
-            position: relative;
-          }
-          .article-content pre.code-block::before {
-            content: attr(data-filename);
-            position: absolute;
-            top: -10px;
-            right: 10px;
-            background: #007acc;
-            color: white;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-family: sans-serif;
-          }
-          .article-content .embedded-asset {
-            max-width: 100%; height: auto; margin: 30px 0;
-            border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-          }
-          .article-content ul, .article-content ol {
-            margin: 20px 0; padding-left: 30px;
-          }
-          .article-content li {
-            margin: 8px 0;
-          }
-          .article-content table {
-            width: 100%; border-collapse: collapse; margin: 30px 0;
-            border: 1px solid #e9ecef;
-          }
-          .article-content th, .article-content td {
-            padding: 12px; text-align: left; border-bottom: 1px solid #e9ecef;
-          }
-          .article-content th {
-            background: #f8f9fa; font-weight: bold;
-          }
-          .article-content hr {
-            border: none; height: 2px; background: #e9ecef;
-            margin: 40px 0;
-          }
-          .article-content a {
-            color: #007acc; text-decoration: none;
-          }
-          .article-content a:hover {
-            text-decoration: underline;
-          }
-          .article-content strong {
-            font-weight: bold;
-          }
-          .article-content em {
-            font-style: italic;
-          }
-          .article-content u {
-            text-decoration: underline;
-          }
-          .tags { margin-top: 30px; }
-          .tag { background: #f0f0f0; padding: 4px 8px; margin-right: 8px; border-radius: 3px; font-size: 12px; }
-          .back-link { color: #007acc; text-decoration: none; }
-          .back-link:hover { text-decoration: underline; }
-          .error { color: red; background: #ffe6e6; padding: 20px; border: 1px solid red; }
-          .not-found { text-align: center; padding: 60px 20px; }
-        </style>
-      </head>
-      <body>
-        {{#found}}
-          <article>
-            <header class="article-header">
-              <h1>{{title}}</h1>
-              <div class="article-meta">
-                By {{author}} on {{publishedDate}}<br>
-                {{#excerpt}}<em>{{excerpt}}</em>{{/excerpt}}
-              </div>
-            </header>
-            
-            <div class="article-content">
-              {{{bodyHtml}}}
-            </div>
-
-            <div style="margin-top: 50px; padding-top: 20px; border-top: 1px solid #eee;">
-              <a href="/contentful/articles" class="back-link">Back to all articles</a>
-            </div>
-          </article>
-        {{/found}}
-        {{^found}}
-          <div class="not-found">
-            <h1>Article Not Found</h1>
-            <p>{{message}}</p>
-            <a href="/contentful/articles" class="back-link">Back to all articles</a>
-          </div>
-        {{/found}}
-        {{#error}}
-          <div class="error">
-            <h2>Error</h2>
-            <p>{{error}}</p>
-          </div>
-        {{/error}}
-      </body>
-    </html>
-  `
-
-## Page by slug (matching F# page function)
-GET /contentful/page/:slug
-  |> lua: `
-    local spaceId = getEnv("CONTENTFUL_SPACE")
-    local token = getEnv("CONTENTFUL_ACCESS_TOKEN")
-    local slug = request.params.slug
-    
-    if not spaceId or not token then
-      return {
-        errors = {{
-          type = "configError", 
-          message = "Missing Contentful configuration"
-        }}
-      }
-    end
-    
-    return {
-      fetchUrl = "https://cdn.contentful.com/spaces/" .. spaceId .. "/entries?content_type=page&fields.slug[in]=" .. slug,
-      fetchHeaders = {
-        ["Authorization"] = "Bearer " .. token
-      }
-    }
-  `
-  |> fetch: `placeholder`
-  |> lua: `
-    if request.data and request.data.response and request.data.response.items then
-      local items = request.data.response.items
-      if #items > 0 then
-        local entry = items[1]
-        local fields = entry.fields or {}
-        
-        -- Basic rich text processing for pages
-        local function renderRichText(richTextObj, includes)
-          if not richTextObj or not richTextObj.content then
-            return ""
-          end
-          
-          local html = ""
-          for _, node in ipairs(richTextObj.content) do
-            if node.nodeType == "paragraph" and node.content then
-              html = html .. "<p>"
-              for _, textNode in ipairs(node.content) do
-                if textNode.nodeType == "text" then
-                  html = html .. (textNode.value or "")
-                end
-              end
-              html = html .. "</p>\n"
-            elseif node.nodeType == "heading-1" and node.content then
-              html = html .. "<h1>"
-              for _, textNode in ipairs(node.content) do
-                if textNode.nodeType == "text" then
-                  html = html .. (textNode.value or "")
-                end
-              end
-              html = html .. "</h1>\n"
-            elseif node.nodeType == "heading-2" and node.content then
-              html = html .. "<h2>"
-              for _, textNode in ipairs(node.content) do
-                if textNode.nodeType == "text" then
-                  html = html .. (textNode.value or "")
-                end
-              end
-              html = html .. "</h2>\n"
-            end
-          end
-          return html
-        end
-        
-        return {
-          title = fields.title or "Untitled",
-          bodyHtml = renderRichText(fields.body, request.data.response.includes),
-          slug = fields.slug or "",
-          seoDescription = fields.seoDescription or "",
-          contentType = entry.sys.contentType.sys.id,
-          found = true
-        }
-      else
-        return {
-          found = false,
-          message = "Page not found with slug: " .. slug
-        }
-      end
-    else
-      return {
-        error = "Failed to fetch page from Contentful",
-        slug = slug
-      }
-    end
-  `
-  |> mustache: `
-    <html>
-      <head>
-        <title>{{#found}}{{title}} - William Cotton{{/found}}{{^found}}Page Not Found{{/found}}</title>
-        {{#seoDescription}}<meta name="description" content="{{seoDescription}}">{{/seoDescription}}
-        <style>
-          body { font-family: Georgia, serif; max-width: 800px; margin: 0 auto; padding: 40px 20px; line-height: 1.6; }
-          .page-content { font-size: 18px; }
-          .error { color: red; background: #ffe6e6; padding: 20px; border: 1px solid red; }
-          .not-found { text-align: center; padding: 60px 20px; }
-          .back-link { color: #007acc; text-decoration: none; }
-          .back-link:hover { text-decoration: underline; }
-        </style>
-      </head>
-      <body>
-        {{#found}}
-          <div class="page-content">
-            <h1>{{title}}</h1>
-            {{{bodyHtml}}}
-          </div>
-        {{/found}}
-        {{^found}}
-          <div class="not-found">
-            <h1>Page Not Found</h1>
-            <p>{{message}}</p>
-            <a href="/" class="back-link">← Back to home</a>
-          </div>
-        {{/found}}
-        {{#error}}
-          <div class="error">
-            <h2>Error</h2>
-            <p>{{error}}</p>
-          </div>
-        {{/error}}
-      </body>
-    </html>
-  `
-
-## Test route for Contentful configuration
-GET /contentful/config
-  |> lua: `
-    local spaceId = getEnv("CONTENTFUL_SPACE")
-    local token = getEnv("CONTENTFUL_ACCESS_TOKEN")
-    
-    return {
-      hasSpaceId = (spaceId ~= nil),
-      hasToken = (token ~= nil),
-      spaceId = spaceId,
-      message = "Contentful configuration status"
-    }
-  `
-
-## Debug route to see raw Contentful response
-GET /contentful/debug/:slug
-  |> lua: `
-    local spaceId = getEnv("CONTENTFUL_SPACE")
-    local token = getEnv("CONTENTFUL_ACCESS_TOKEN")
-    local slug = request.params.slug
-    
-    if not spaceId or not token then
-      return {
-        errors = {{
-          type = "configError", 
-          message = "Missing Contentful configuration"
-        }}
-      }
-    end
-    
-    return {
-      fetchUrl = "https://cdn.contentful.com/spaces/" .. spaceId .. "/entries?content_type=blogPost&fields.slug[in]=" .. slug,
-      fetchHeaders = {
-        ["Authorization"] = "Bearer " .. token
-      }
-    }
-  `
-  |> fetch: `placeholder`
-  |> lua: `
-    return {
-      rawResponse = request.data.response,
-      message = "Raw Contentful API response for debugging"
-    }
-  `
-  |> mustache: `
-    <html>
-      <head><title>Debug: {{message}}</title></head>
-      <body>
-        <h1>{{message}}</h1>
-        <pre style="background: #f5f5f5; padding: 20px; overflow-x: auto; white-space: pre-wrap;">{{rawResponse}}</pre>
-      </body>
-    </html>
-  `

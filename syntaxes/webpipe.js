@@ -96,6 +96,23 @@ export default function(hljs) {
         ]
       },
 
+      // JQ filter between `output` and the assertion condition in tests
+      {
+        begin: '\\b(then|and)\\s+output\\s*`',
+        end: '`',
+        contains: [
+          { scope: 'string', begin: '"', end: '"' },
+          { scope: 'variable', match: '\\.[a-zA-Z_][a-zA-Z0-9_]*|\\.[0-9]+' },
+          { scope: 'variable', match: '\\$[a-zA-Z_][a-zA-Z0-9_]*' },
+          { scope: 'number', match: '\\b[0-9]+(?:\\.[0-9]+)?\\b' },
+          { scope: 'literal', match: '\\b(null|true|false)\\b' },
+          { scope: 'keyword', match: '\\b(map|select|keys|values|length|tostring|tonumber|type|now|empty|error|debug|reverse|sort|group_by|unique|flatten|min|max|add|any|all|range|floor|ceil|round|sqrt|test|match|capture|split|join|ltrimstr|rtrimstr|startswith|endswith|inside|contains|index|rindex|tojson|fromjson)\\b' },
+          { scope: 'operator', match: '\\||\\+|\\-|\\*|/|==|!=|<|>|<=|>=|and|or|not|\\?' },
+          { scope: 'punctuation', match: '[\\[\\]\\{\\}\\(\\),\\.:]'
+          }
+        ]
+      },
+
       // SQL embedded content
       {
         begin: '\\bpg:\\s*`',
@@ -164,7 +181,7 @@ export default function(hljs) {
       // Other BDD keywords
       {
         scope: 'keyword',
-        match: '\\b(with|when|then|and|executing|calling|input|output|equals|status|mock|returning)\\b'
+        match: '\\b(with|when|then|and|executing|calling|input|output|equals|contains|matches|in|status|mock|returning)\\b'
       }
     ]
   };
