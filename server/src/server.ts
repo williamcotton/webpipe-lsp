@@ -99,6 +99,74 @@ async function validateDocument(doc: TextDocument) {
         });
       }
     }
+
+    // BDD: when executing pipeline <name>
+    const whenExecPipelineRe = /(^|\n)\s*when\s+executing\s+pipeline\s+([A-Za-z_][\w-]*)/g;
+    for (let m; (m = whenExecPipelineRe.exec(text)); ) {
+      const name = m[2];
+      if (!pipelineNames.has(name)) {
+        const nameStart = m.index + m[0].lastIndexOf(name);
+        const nameEnd = nameStart + name.length;
+        diagnostics.push({
+          severity: DiagnosticSeverity.Error,
+          range: { start: doc.positionAt(nameStart), end: doc.positionAt(nameEnd) },
+          message: `Unknown pipeline: ${name}`,
+          source: 'webpipe-lsp'
+        });
+      }
+    }
+
+    // BDD: when executing variable <type> <name>
+    const whenExecVarRe = /(^|\n)\s*when\s+executing\s+variable\s+([A-Za-z_][\w-]*)\s+([A-Za-z_][\w-]*)/g;
+    for (let m; (m = whenExecVarRe.exec(text)); ) {
+      const varType = m[2];
+      const varName = m[3];
+      const declared = variablesByType.get(varType);
+      if (!declared || !declared.has(varName)) {
+        const nameStart = m.index + m[0].lastIndexOf(varName);
+        const nameEnd = nameStart + varName.length;
+        diagnostics.push({
+          severity: DiagnosticSeverity.Error,
+          range: { start: doc.positionAt(nameStart), end: doc.positionAt(nameEnd) },
+          message: `Unknown ${varType} variable: ${varName}`,
+          source: 'webpipe-lsp'
+        });
+      }
+    }
+
+    // BDD: with/and mock pipeline <name> returning ...
+    const mockPipelineRe = /(^|\n)\s*(?:with|and)\s+mock\s+pipeline\s+([A-Za-z_][\w-]*)\s+returning\s+`/g;
+    for (let m; (m = mockPipelineRe.exec(text)); ) {
+      const name = m[2];
+      if (!pipelineNames.has(name)) {
+        const nameStart = m.index + m[0].lastIndexOf(name);
+        const nameEnd = nameStart + name.length;
+        diagnostics.push({
+          severity: DiagnosticSeverity.Error,
+          range: { start: doc.positionAt(nameStart), end: doc.positionAt(nameEnd) },
+          message: `Unknown pipeline in mock: ${name}`,
+          source: 'webpipe-lsp'
+        });
+      }
+    }
+
+    // BDD: with/and mock <type>.<name> returning ...
+    const mockVarRe = /(^|\n)\s*(?:with|and)\s+mock\s+([A-Za-z_][\w-]*)\.([A-Za-z_][\w-]*)\s+returning\s+`/g;
+    for (let m; (m = mockVarRe.exec(text)); ) {
+      const varType = m[2];
+      const varName = m[3];
+      const declared = variablesByType.get(varType);
+      if (!declared || !declared.has(varName)) {
+        const nameStart = m.index + m[0].lastIndexOf(varName);
+        const nameEnd = nameStart + varName.length;
+        diagnostics.push({
+          severity: DiagnosticSeverity.Error,
+          range: { start: doc.positionAt(nameStart), end: doc.positionAt(nameEnd) },
+          message: `Unknown ${varType} variable in mock: ${varName}`,
+          source: 'webpipe-lsp'
+        });
+      }
+    }
   } catch (_e) {
     // best-effort; avoid crashing diagnostics on regex issues
   }
