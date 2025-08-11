@@ -14,11 +14,23 @@
   },
   "license": "MIT",
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.89.0"
   },
   "categories": [
     "Programming Languages"
   ],
+  "main": "./client/out/extension.js",
+  "activationEvents": [
+    "onLanguage:webpipe"
+  ],
+  "scripts": {
+    "compile": "npm run compile:client && npm run compile:server",
+    "compile:client": "tsc -b client",
+    "compile:server": "tsc -b server",
+    "watch": "tsc -b -w client server",
+    "postinstall": "node ./client/postinstall.js || true",
+    "vscode:prepublish": "npm run compile"
+  },
   "contributes": {
     "languages": [{
       "id": "webpipe",
@@ -39,5 +51,15 @@
         "meta.embedded.block.mustache": "mustache"
       }
     }]
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.39",
+    "typescript": "^5.5.4",
+    "@types/vscode": "^1.89.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.11"
   }
 }
