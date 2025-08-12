@@ -1,6 +1,7 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Diagnostic, DiagnosticSeverity, Connection } from 'vscode-languageserver/node';
 import { VALID_HTTP_METHODS, KNOWN_MIDDLEWARE, KNOWN_STEPS, REGEX_PATTERNS } from './constants';
+import { collectHandlebarsSymbols } from './symbol-collector';
 import { parseProgramWithDiagnostics } from './parser';
 
 interface DiagnosticPush {
@@ -70,6 +71,7 @@ export class DocumentValidator {
       this.validateResultBlocks(text, push);
       this.validateAssertions(text, push);
       this.validateUnknownSteps(text, push);
+      this.validateHandlebarsPartialReferences(text, push);
       
     } catch (_e) {
       // Best-effort validation; avoid crashing on regex issues
@@ -427,6 +429,33 @@ export class DocumentValidator {
     if (backtickCount % 2 === 1) {
       const idx = text.lastIndexOf('`');
       push(DiagnosticSeverity.Warning, Math.max(0, idx), Math.max(0, idx + 1), 'Unclosed backtick-delimited string');
+    }
+  }
+
+  private validateHandlebarsPartialReferences(text: string, push: DiagnosticPush): void {
+    const hb = collectHandlebarsSymbols(text);
+    for (const [name, uses] of hb.usagesByName.entries()) {
+      const hasGlobalDecl = hb.declByName.has(name);
+      for (const u of uses) {
+        // Check for inline def within the same content block
+        let hasInlineDecl = false;
+        for (const entry of hb.inlineDefsByContent) {
+          if (u.start >= entry.range.start && u.start <= entry.range.end) {
+            if (entry.inlineByName.has(name) || entry.inlineBlockByName.has(name)) {
+              hasInlineDecl = true;
+            }
+            break;
+          }
+        }
+        if (!hasInlineDecl && !hasGlobalDecl) {
+          push(
+            DiagnosticSeverity.Warning,
+            u.start,
+            u.end,
+            `Unknown Handlebars partial: ${name}`
+          );
+        }
+      }
     }
   }
 }
