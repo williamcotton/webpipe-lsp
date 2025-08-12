@@ -13,9 +13,12 @@ import {
   Location,
   CodeLens,
   DocumentHighlight,
-  DocumentHighlightKind
+  DocumentHighlightKind,
+  Hover,
+  MarkupKind
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
+import { getPipelineRanges, getVariableRanges } from './parser';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
@@ -27,6 +30,7 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
       completionProvider: { triggerCharacters: [':', ' ', '\t'] },
       codeLensProvider: { resolveProvider: false },
       documentHighlightProvider: true,
+      hoverProvider: true,
       referencesProvider: true,
       definitionProvider: true,
       // Additional features (hovers, etc.) can be added over time
@@ -690,6 +694,82 @@ connection.onReferences((params) => {
     const varType = m[2];
     addDeclAndRefsForVariable(`${varType}::${word}`);
     return results.length ? results : null;
+  }
+
+  return null;
+});
+
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function createMarkdownCodeBlock(language: string | undefined, content: string): string {
+  const lang = language ? language : '';
+  return '```' + lang + '\n' + content + '\n```';
+}
+
+function formatVariableHover(text: string, varType: string, varName: string): string | null {
+  const ranges = getVariableRanges(text);
+  const r = ranges.get(`${varType}::${varName}`);
+  if (!r) return null;
+  let snippet = text.slice(r.start, r.end).trimEnd();
+  if (snippet.length > 2400) snippet = snippet.slice(0, 2400) + '\n…';
+  return createMarkdownCodeBlock('webpipe', snippet);
+}
+
+function formatPipelineHover(text: string, pipelineName: string): string | null {
+  const ranges = getPipelineRanges(text);
+  const r = ranges.get(pipelineName);
+  if (!r) return null;
+  let snippet = text.slice(r.start, r.end).trimEnd();
+  if (snippet.length > 2400) snippet = snippet.slice(0, 2400) + '\n…';
+  return createMarkdownCodeBlock('webpipe', snippet);
+}
+
+connection.onHover((params): Hover | null => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const text = doc.getText();
+  const pos = params.position as Position;
+  const offset = doc.offsetAt(pos);
+  const wordInfo = getWordAt(text, offset);
+  if (!wordInfo) return null;
+  const { word } = wordInfo;
+
+  const lineStart = text.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  const nextNl = text.indexOf('\n', offset);
+  const lineEnd = nextNl === -1 ? text.length : nextNl;
+  const lineText = text.slice(lineStart, lineEnd);
+
+  // Pipelines
+  if (/^\s*\|>\s*pipeline\s*:/.test(lineText) || /^\s*when\s+executing\s+pipeline\s+/.test(lineText) || /^\s*(with|and)\s+mock\s+pipeline\s+/.test(lineText) || /^\s*pipeline\s+[A-Za-z_][\w-]*\s*=/.test(lineText)) {
+    const md = formatPipelineHover(text, word);
+    if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
+  }
+
+  // Variables
+  let m: RegExpExecArray | null;
+  if ((m = /^\s*([A-Za-z_][\w-]*)\s+([A-Za-z_][\w-]*)\s*=\s*`/.exec(lineText))) {
+    const varType = m[1];
+    const md = formatVariableHover(text, varType, word);
+    if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
+  }
+  if ((m = /^\s*\|>\s*([A-Za-z_][\w-]*)\s*:/.exec(lineText))) {
+    const varType = m[1];
+    if (varType !== 'pipeline') {
+      const md = formatVariableHover(text, varType, word);
+      if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
+    }
+  }
+  if ((m = /^\s*when\s+executing\s+variable\s+([A-Za-z_][\w-]*)\s+/.exec(lineText))) {
+    const varType = m[1];
+    const md = formatVariableHover(text, varType, word);
+    if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
+  }
+  if ((m = /^\s*(with|and)\s+mock\s+([A-Za-z_][\w-]*)\./.exec(lineText))) {
+    const varType = m[2];
+    const md = formatVariableHover(text, varType, word);
+    if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
   }
 
   return null;
