@@ -9,7 +9,8 @@ import {
   DiagnosticSeverity,
   CompletionItem,
   CompletionItemKind,
-  Position
+  Position,
+  Location
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
@@ -21,6 +22,7 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       completionProvider: { triggerCharacters: [':', ' ', '\t'] },
+      definitionProvider: true,
       // Additional features (hovers, etc.) can be added over time
     }
   };
@@ -48,6 +50,42 @@ function collectVariablesAndPipelines(text: string): {
   }
 
   return { variablesByType, pipelineNames };
+}
+
+function collectDeclarationPositions(text: string): {
+  variablePositions: Map<string, { start: number; length: number }>;
+  pipelinePositions: Map<string, { start: number; length: number }>;
+} {
+  const variablePositions = new Map<string, { start: number; length: number }>();
+  const varDeclRe = /(^|\n)\s*([A-Za-z_][\w-]*)\s+([A-Za-z_][\w-]*)\s*=\s*`[\s\S]*?`/g;
+  for (let m; (m = varDeclRe.exec(text)); ) {
+    const varType = m[2];
+    const varName = m[3];
+    const nameStart = m.index + m[0].lastIndexOf(varName);
+    variablePositions.set(`${varType}::${varName}`, { start: nameStart, length: varName.length });
+  }
+
+  const pipelinePositions = new Map<string, { start: number; length: number }>();
+  const pipeDeclRe = /(^|\n)\s*pipeline\s+([A-Za-z_][\w-]*)\s*=/g;
+  for (let m; (m = pipeDeclRe.exec(text)); ) {
+    const name = m[2];
+    const nameStart = m.index + m[0].lastIndexOf(name);
+    pipelinePositions.set(name, { start: nameStart, length: name.length });
+  }
+
+  return { variablePositions, pipelinePositions };
+}
+
+function getWordAt(text: string, offset: number): { word: string; start: number; end: number } | null {
+  const isWordChar = (ch: string) => /[A-Za-z0-9_-]/.test(ch);
+  let start = offset;
+  let end = offset;
+  while (start > 0 && isWordChar(text[start - 1])) start--;
+  while (end < text.length && isWordChar(text[end])) end++;
+  if (start === end) return null;
+  const word = text.slice(start, end);
+  if (!/^[A-Za-z_][\w-]*$/.test(word)) return null;
+  return { word, start, end };
 }
 
 async function validateDocument(doc: TextDocument) {
@@ -467,6 +505,93 @@ connection.onCompletion((params): CompletionItem[] => {
   }
 
   return [];
+});
+
+connection.onDefinition((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const text = doc.getText();
+  const { variablePositions, pipelinePositions } = collectDeclarationPositions(text);
+  const pos = params.position as Position;
+  const offset = doc.offsetAt(pos);
+  const wordInfo = getWordAt(text, offset);
+  if (!wordInfo) return null;
+  const { word } = wordInfo;
+
+  const lineStart = text.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  const nextNl = text.indexOf('\n', offset);
+  const lineEnd = nextNl === -1 ? text.length : nextNl;
+  const lineText = text.slice(lineStart, lineEnd);
+
+  // |> pipeline: <name>
+  if (/^\s*\|>\s*pipeline\s*:/.test(lineText)) {
+    const hit = pipelinePositions.get(word);
+    if (hit) {
+      const range = { start: doc.positionAt(hit.start), end: doc.positionAt(hit.start + hit.length) };
+      return Location.create(doc.uri, range);
+    }
+  }
+
+  // |> <stepType>: <varName>
+  const stepVarLine = /^\s*\|>\s*([A-Za-z_][\w-]*)\s*:\s*([A-Za-z_][\w-]*)?/;
+  const svm = stepVarLine.exec(lineText);
+  if (svm) {
+    const stepType = svm[1];
+    if (stepType !== 'pipeline') {
+      const key = `${stepType}::${word}`;
+      const hit = variablePositions.get(key);
+      if (hit) {
+        const range = { start: doc.positionAt(hit.start), end: doc.positionAt(hit.start + hit.length) };
+        return Location.create(doc.uri, range);
+      }
+    }
+  }
+
+  // when executing pipeline <name>
+  if (/^\s*when\s+executing\s+pipeline\s+/.test(lineText)) {
+    const hit = pipelinePositions.get(word);
+    if (hit) {
+      const range = { start: doc.positionAt(hit.start), end: doc.positionAt(hit.start + hit.length) };
+      return Location.create(doc.uri, range);
+    }
+  }
+
+  // when executing variable <type> <name>
+  const whenVar = /^\s*when\s+executing\s+variable\s+([A-Za-z_][\w-]*)\s+([A-Za-z_][\w-]*)/;
+  const wvm = whenVar.exec(lineText);
+  if (wvm) {
+    const varType = wvm[1];
+    const key = `${varType}::${word}`;
+    const hit = variablePositions.get(key);
+    if (hit) {
+      const range = { start: doc.positionAt(hit.start), end: doc.positionAt(hit.start + hit.length) };
+      return Location.create(doc.uri, range);
+    }
+  }
+
+  // with/and mock pipeline <name> returning `...`
+  if (/^\s*(with|and)\s+mock\s+pipeline\s+/.test(lineText)) {
+    const hit = pipelinePositions.get(word);
+    if (hit) {
+      const range = { start: doc.positionAt(hit.start), end: doc.positionAt(hit.start + hit.length) };
+      return Location.create(doc.uri, range);
+    }
+  }
+
+  // with/and mock <type>.<name> returning `...`
+  const mockVar = /^\s*(with|and)\s+mock\s+([A-Za-z_][\w-]*)\.([A-Za-z_][\w-]*)/;
+  const mv = mockVar.exec(lineText);
+  if (mv) {
+    const varType = mv[2];
+    const key = `${varType}::${word}`;
+    const hit = variablePositions.get(key);
+    if (hit) {
+      const range = { start: doc.positionAt(hit.start), end: doc.positionAt(hit.start + hit.length) };
+      return Location.create(doc.uri, range);
+    }
+  }
+
+  return null;
 });
 
 documents.listen(connection);
