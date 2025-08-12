@@ -4,10 +4,11 @@ import {
   CodeLensParams, DocumentHighlightParams 
 } from 'vscode-languageserver/node';
 import { 
-  collectDeclarationPositions, collectReferencePositions, 
+  collectReferencePositions, 
   collectHandlebarsSymbols 
 } from './symbol-collector';
 import { getWordAt } from './utils';
+import { getVariableRanges, getPipelineRanges } from './parser';
 
 export class UIProviders {
   onCodeLens(params: CodeLensParams, documents: Map<string, TextDocument>): CodeLens[] {
@@ -15,7 +16,16 @@ export class UIProviders {
     if (!doc) return [];
     
     const text = doc.getText();
-    const { variablePositions, pipelinePositions } = collectDeclarationPositions(text);
+    const variableRanges = getVariableRanges(text);
+    const pipelineRanges = getPipelineRanges(text);
+    const variablePositions = new Map<string, { start: number; length: number }>();
+    for (const [key, r] of variableRanges.entries()) {
+      variablePositions.set(key, { start: r.start, length: r.end - r.start });
+    }
+    const pipelinePositions = new Map<string, { start: number; length: number }>();
+    for (const [name, r] of pipelineRanges.entries()) {
+      pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
+    }
     const { variableRefs, pipelineRefs } = collectReferencePositions(text);
     const lenses: CodeLens[] = [];
 
@@ -74,7 +84,16 @@ export class UIProviders {
     if (!doc) return null;
     
     const text = doc.getText();
-    const { variablePositions, pipelinePositions } = collectDeclarationPositions(text);
+    const variableRanges = getVariableRanges(text);
+    const pipelineRanges = getPipelineRanges(text);
+    const variablePositions = new Map<string, { start: number; length: number }>();
+    for (const [key, r] of variableRanges.entries()) {
+      variablePositions.set(key, { start: r.start, length: r.end - r.start });
+    }
+    const pipelinePositions = new Map<string, { start: number; length: number }>();
+    for (const [name, r] of pipelineRanges.entries()) {
+      pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
+    }
     const { variableRefs, pipelineRefs } = collectReferencePositions(text);
     const pos = params.position;
     const offset = doc.offsetAt(pos);
@@ -141,7 +160,7 @@ export class UIProviders {
     
     if (/^\s*\|>\s*([A-Za-z_][\w-]*)\s*:/.test(lineText) || 
         /^\s*when\s+executing\s+variable\s+/.test(lineText) || 
-        /^\s*(with|and)\s+mock\s+[A-Za-z_][\w-]*\./.test(lineText)) {
+         /^\s*(with|and)\s+mock\s+[A-Za-z_][\w-]*\./.test(lineText)) {
       
       const stepTypeMatch = /^\s*\|>\s*([A-Za-z_][\w-]*)\s*:/.exec(lineText);
       const execVarMatch = /^\s*when\s+executing\s+variable\s+([A-Za-z_][\w-]*)\s+/.exec(lineText);

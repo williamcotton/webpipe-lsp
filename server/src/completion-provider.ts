@@ -1,6 +1,6 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { CompletionItem, CompletionItemKind, Position, CompletionParams } from 'vscode-languageserver/node';
-import { collectVariablesAndPipelines } from './symbol-collector';
+import { parseProgram } from './parser';
 
 export class CompletionProvider {
   onCompletion(params: CompletionParams, documents: Map<string, TextDocument>): CompletionItem[] {
@@ -8,7 +8,13 @@ export class CompletionProvider {
     if (!doc) return [];
     
     const text = doc.getText();
-    const { variablesByType, pipelineNames } = collectVariablesAndPipelines(text);
+    const program = parseProgram(text);
+    const variablesByType = new Map<string, Set<string>>();
+    for (const v of program.variables) {
+      if (!variablesByType.has(v.varType)) variablesByType.set(v.varType, new Set());
+      variablesByType.get(v.varType)!.add(v.name);
+    }
+    const pipelineNames = new Set<string>(program.pipelines.map(p => p.name));
 
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);

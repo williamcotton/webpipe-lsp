@@ -207,6 +207,8 @@ class Parser {
         const lineEnd = this.findLineEnd(this.pos);
         this.report('Unrecognized or unsupported syntax', lineStart, lineEnd, 'warning');
         this.skipToEol();
+        // consume trailing newline if present
+        if (this.cur() === '\n') this.pos++;
         this.consumeWhile((c) => c === '\n');
       }
     }
@@ -239,7 +241,22 @@ class Parser {
   }
 
   private skipSpaces(): void {
-    this.consumeWhile((ch) => ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n');
+    while (true) {
+      // Skip whitespace
+      this.consumeWhile((ch) => ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n');
+      // Line comments starting with '#' or '//'
+      if (this.text.startsWith('#', this.pos)) {
+        this.skipToEol();
+        if (this.cur() === '\n') this.pos++;
+        continue;
+      }
+      if (this.text.startsWith('//', this.pos)) {
+        this.skipToEol();
+        if (this.cur() === '\n') this.pos++;
+        continue;
+      }
+      break;
+    }
   }
 
   private skipInlineSpaces(): void {

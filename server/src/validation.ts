@@ -1,6 +1,7 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Diagnostic, DiagnosticSeverity, Connection } from 'vscode-languageserver/node';
 import { VALID_HTTP_METHODS, KNOWN_MIDDLEWARE, KNOWN_STEPS, REGEX_PATTERNS } from './constants';
+import { parseProgramWithDiagnostics } from './parser';
 
 interface DiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
@@ -44,7 +45,18 @@ export class DocumentValidator {
         });
       };
 
-      const { variablesByType, pipelineNames } = this.collectDeclarations(text, push);
+      // Parse AST and include parser diagnostics
+      const { program, diagnostics: parseDiagnostics } = parseProgramWithDiagnostics(text);
+      for (const d of parseDiagnostics) {
+        push(
+          d.severity === 'error' ? DiagnosticSeverity.Error : d.severity === 'warning' ? DiagnosticSeverity.Warning : DiagnosticSeverity.Information,
+          d.start,
+          d.end,
+          d.message
+        );
+      }
+
+      const { variablesByType, pipelineNames } = this.collectDeclarations(text, push, program);
       const routePatterns = this.validateRoutes(text, push);
       
       this.validateStepReferences(text, variablesByType, push);
@@ -58,22 +70,33 @@ export class DocumentValidator {
       this.validateResultBlocks(text, push);
       this.validateAssertions(text, push);
       this.validateUnknownSteps(text, push);
-      this.validateUnclosedBackticks(text, push);
       
     } catch (_e) {
       // Best-effort validation; avoid crashing on regex issues
     }
   }
 
-  private collectDeclarations(text: string, push: DiagnosticPush): {
+  private collectDeclarations(text: string, push: DiagnosticPush, program?: { variables: Array<{ varType: string; name: string }>; pipelines: Array<{ name: string }> }): {
     variablesByType: Map<string, Set<string>>;
     pipelineNames: Set<string>;
   } {
-    // Collect declared variables
-    const varDeclRe = new RegExp(REGEX_PATTERNS.VAR_DECL.source, REGEX_PATTERNS.VAR_DECL.flags);
+    // Prefer AST to build declarations
     const variablesByType = new Map<string, Set<string>>();
+    const pipelineNames = new Set<string>();
+
+    if (program) {
+      for (const v of program.variables) {
+        if (!variablesByType.has(v.varType)) variablesByType.set(v.varType, new Set());
+        variablesByType.get(v.varType)!.add(v.name);
+      }
+      for (const p of program.pipelines) {
+        pipelineNames.add(p.name);
+      }
+    }
+
+    // Use regex only to locate duplicates precisely for diagnostics
+    const varDeclRe = new RegExp(REGEX_PATTERNS.VAR_DECL.source, REGEX_PATTERNS.VAR_DECL.flags);
     const varDeclSeen = new Set<string>();
-    
     for (let m; (m = varDeclRe.exec(text)); ) {
       const varType = m[2];
       const varName = m[3];
@@ -83,15 +106,10 @@ export class DocumentValidator {
         push(DiagnosticSeverity.Warning, nameStart, nameStart + varName.length, `Duplicate ${varType} variable: ${varName}`);
       }
       varDeclSeen.add(key);
-      if (!variablesByType.has(varType)) variablesByType.set(varType, new Set());
-      variablesByType.get(varType)!.add(varName);
     }
 
-    // Collect named pipelines
     const pipeDeclRe = new RegExp(REGEX_PATTERNS.PIPE_DECL.source, REGEX_PATTERNS.PIPE_DECL.flags);
-    const pipelineNames = new Set<string>();
     const pipelineSeen = new Set<string>();
-    
     for (let m; (m = pipeDeclRe.exec(text)); ) {
       const name = m[2];
       if (pipelineSeen.has(name)) {
@@ -99,7 +117,6 @@ export class DocumentValidator {
         push(DiagnosticSeverity.Warning, nameStart, nameStart + name.length, `Duplicate pipeline: ${name}`);
       }
       pipelineSeen.add(name);
-      pipelineNames.add(name);
     }
 
     return { variablesByType, pipelineNames };

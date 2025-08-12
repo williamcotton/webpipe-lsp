@@ -4,7 +4,7 @@ import {
   HoverParams, DefinitionParams
 } from 'vscode-languageserver/node';
 import { 
-  collectDeclarationPositions, collectReferencePositions, 
+  collectReferencePositions, 
   collectHandlebarsSymbols 
 } from './symbol-collector';
 import { getVariableRanges, getPipelineRanges } from './parser';
@@ -17,7 +17,16 @@ export class LanguageProviders {
     if (!doc) return null;
     
     const text = doc.getText();
-    const { variablePositions, pipelinePositions } = collectDeclarationPositions(text);
+    const variableRanges = getVariableRanges(text);
+    const pipelineRanges = getPipelineRanges(text);
+    const variablePositions = new Map<string, { start: number; length: number }>();
+    for (const [key, r] of variableRanges.entries()) {
+      variablePositions.set(key, { start: r.start, length: r.end - r.start });
+    }
+    const pipelinePositions = new Map<string, { start: number; length: number }>();
+    for (const [name, r] of pipelineRanges.entries()) {
+      pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
+    }
     const { variableRefs, pipelineRefs } = collectReferencePositions(text);
     const hb = collectHandlebarsSymbols(text);
     const pos = params.position as Position;
@@ -93,7 +102,16 @@ export class LanguageProviders {
     if (!doc) return null;
     
     const text = doc.getText();
-    const { variablePositions, pipelinePositions } = collectDeclarationPositions(text);
+    const variableRanges = getVariableRanges(text);
+    const pipelineRanges = getPipelineRanges(text);
+    const variablePositions = new Map<string, { start: number; length: number }>();
+    for (const [key, r] of variableRanges.entries()) {
+      variablePositions.set(key, { start: r.start, length: r.end - r.start });
+    }
+    const pipelinePositions = new Map<string, { start: number; length: number }>();
+    for (const [name, r] of pipelineRanges.entries()) {
+      pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
+    }
     const hb = collectHandlebarsSymbols(text);
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);
@@ -219,7 +237,7 @@ export class LanguageProviders {
       if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
     
-    if ((m = /^\s*(with|and)\s+mock\s+([A-Za-z_][\w-]*)\\./.exec(lineText))) {
+    if ((m = /^\s*(with|and)\s+mock\s+([A-Za-z_][\w-]*)\./.exec(lineText))) {
       const varType = m[2];
       const md = this.formatVariableHover(text, varType, word);
       if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
@@ -256,7 +274,7 @@ export class LanguageProviders {
       }
     }
 
-    const mockVar = /^\s*(with|and)\s+mock\s+([A-Za-z_][\w-]*)\\.([A-Za-z_][\w-]*)/;
+    const mockVar = /^\s*(with|and)\s+mock\s+([A-Za-z_][\w-]*)\.([A-Za-z_][\w-]*)/;
     const mv = mockVar.exec(lineText);
     if (mv) {
       const varType = mv[2];
