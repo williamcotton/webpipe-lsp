@@ -603,6 +603,7 @@ connection.onReferences((params) => {
   const text = doc.getText();
   const { variablePositions, pipelinePositions } = collectDeclarationPositions(text);
   const { variableRefs, pipelineRefs } = collectReferencePositions(text);
+  const hb = collectHandlebarsSymbols(text);
   const pos = params.position as Position;
   const offset = doc.offsetAt(pos);
   const wordInfo = getWordAt(text, offset);
@@ -696,6 +697,23 @@ connection.onReferences((params) => {
     return results.length ? results : null;
   }
 
+  // Inside handlebars template content: list refs for the partial under cursor
+  const withinContent = hb.contentRanges.some(r => offset >= r.start && offset <= r.end);
+  if (withinContent) {
+    for (const [name, uses] of hb.usagesByName.entries()) {
+      for (const u of uses) {
+        if (offset >= u.start && offset <= u.end) {
+          if (includeDecl) {
+            const decl = hb.declByName.get(name);
+            if (decl) results.push(Location.create(doc.uri, { start: doc.positionAt(decl.nameStart), end: doc.positionAt(decl.nameEnd) }));
+          }
+          for (const r of uses) results.push(Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.end) }));
+          return results.length ? results : null;
+        }
+      }
+    }
+  }
+
   return null;
 });
 
@@ -706,6 +724,112 @@ function escapeRegExp(input: string): string {
 function createMarkdownCodeBlock(language: string | undefined, content: string): string {
   const lang = language ? language : '';
   return '```' + lang + '\n' + content + '\n```';
+}
+
+type RangeAbs = { start: number; end: number };
+
+function collectHandlebarsContentRanges(text: string): RangeAbs[] {
+  const ranges: RangeAbs[] = [];
+  // Variable declarations: handlebars <name> = `...`
+  const varRe = /(^|\n)\s*handlebars\s+([A-Za-z_][\w-]*)\s*=\s*`([\s\S]*?)`/g;
+  for (let m; (m = varRe.exec(text)); ) {
+    const whole = m[0];
+    const content = m[3];
+    const backtickRel = whole.indexOf('`');
+    if (backtickRel >= 0) {
+      const contentStart = m.index + backtickRel + 1;
+      ranges.push({ start: contentStart, end: contentStart + content.length });
+    }
+  }
+  // Inline step content: |> handlebars: `...`
+  const stepRe = /(^|\n)\s*\|>\s*handlebars\s*:\s*`([\s\S]*?)`/g;
+  for (let m; (m = stepRe.exec(text)); ) {
+    const whole = m[0];
+    const content = m[2];
+    const backtickRel = whole.indexOf('`');
+    if (backtickRel >= 0) {
+      const contentStart = m.index + backtickRel + 1;
+      ranges.push({ start: contentStart, end: contentStart + content.length });
+    }
+  }
+  return ranges;
+}
+
+function collectHandlebarsSymbols(text: string): {
+  declByName: Map<string, { nameStart: number; nameEnd: number }>;
+  contentRanges: RangeAbs[];
+  usagesByName: Map<string, Array<{ start: number; end: number }>>;
+  inlineDefsByContent: Array<{
+    range: RangeAbs;
+    inlineByName: Map<string, { start: number; end: number }>;
+    inlineBlockByName: Map<string, { start: number; end: number }>;
+  }>;
+} {
+  const declByName = new Map<string, { nameStart: number; nameEnd: number }>();
+  // Reuse variablePositions and filter for handlebars
+  const { variablePositions } = collectDeclarationPositions(text);
+  for (const [key, pos] of variablePositions.entries()) {
+    if (key.startsWith('handlebars::')) {
+      const name = key.slice('handlebars::'.length);
+      declByName.set(name, { nameStart: pos.start, nameEnd: pos.start + pos.length });
+    }
+  }
+
+  const contentRanges = collectHandlebarsContentRanges(text);
+  const usagesByName = new Map<string, Array<{ start: number; end: number }>>();
+  const inlineDefsByContent: Array<{
+    range: RangeAbs;
+    inlineByName: Map<string, { start: number; end: number }>;
+    inlineBlockByName: Map<string, { start: number; end: number }>;
+  }> = [];
+
+  // Patterns for usages and inline definitions
+  const includeRe = /\{\{>\s*([A-Za-z_][\w./-]*|@partial-block)/g;
+  const blockIncludeRe = /\{\{#>\s*([A-Za-z_][\w./-]*|@partial-block)/g;
+  const inlineDefRe = /\{\{#\*inline\s+"([^"]+)"\s*\}\}/g;
+  const inlineCloseRe = /\{\{\/inline\s*\}\}/g;
+
+  for (const range of contentRanges) {
+    const slice = text.slice(range.start, range.end);
+    const inlineByName = new Map<string, { start: number; end: number }>();
+    const inlineBlockByName = new Map<string, { start: number; end: number }>();
+
+    // Inline definitions within this content
+    for (let m; (m = inlineDefRe.exec(slice)); ) {
+      const name = m[1];
+      const nameStart = range.start + m.index + m[0].indexOf(name);
+      inlineByName.set(name, { start: nameStart, end: nameStart + name.length });
+      // Attempt to capture the whole inline block up to {{/inline}}
+      const blockStartAbs = range.start + m.index;
+      inlineCloseRe.lastIndex = m.index + m[0].length; // continue search after open
+      const close = inlineCloseRe.exec(slice);
+      if (close) {
+        const blockEndAbs = range.start + close.index + close[0].length;
+        inlineBlockByName.set(name, { start: blockStartAbs, end: blockEndAbs });
+      }
+    }
+
+    // Usages: simple includes
+    for (let m; (m = includeRe.exec(slice)); ) {
+      const name = m[1];
+      if (name === '@partial-block') continue;
+      const nameStart = range.start + m.index + m[0].indexOf(name);
+      if (!usagesByName.has(name)) usagesByName.set(name, []);
+      usagesByName.get(name)!.push({ start: nameStart, end: nameStart + name.length });
+    }
+    // Usages: block includes
+    for (let m; (m = blockIncludeRe.exec(slice)); ) {
+      const name = m[1];
+      if (name === '@partial-block') continue;
+      const nameStart = range.start + m.index + m[0].indexOf(name);
+      if (!usagesByName.has(name)) usagesByName.set(name, []);
+      usagesByName.get(name)!.push({ start: nameStart, end: nameStart + name.length });
+    }
+
+    inlineDefsByContent.push({ range, inlineByName, inlineBlockByName });
+  }
+
+  return { declByName, contentRanges, usagesByName, inlineDefsByContent };
 }
 
 function formatVariableHover(text: string, varType: string, varName: string): string | null {
@@ -772,6 +896,49 @@ connection.onHover((params): Hover | null => {
     if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
   }
 
+  // Handlebars partial hover (inside template content): show definition of the partial name under cursor
+  const hb = collectHandlebarsSymbols(text);
+  // If cursor is within any handlebars content range and over a usage token, show its definition
+  const withinContent = hb.contentRanges.some(r => offset >= r.start && offset <= r.end);
+  if (withinContent) {
+    // Find usage at cursor
+    for (const [name, uses] of hb.usagesByName.entries()) {
+      for (const u of uses) {
+        if (offset >= u.start && offset <= u.end) {
+          // Prefer inline def within same content; fallback to declared partial
+          let defRange: RangeAbs | undefined = undefined;
+          let hoverLang: string | undefined = undefined;
+          for (const entry of hb.inlineDefsByContent) {
+            if (offset >= entry.range.start && offset <= entry.range.end) {
+              const localBlock = entry.inlineBlockByName.get(name);
+              if (localBlock) { defRange = localBlock; hoverLang = 'handlebars'; }
+              else {
+                const local = entry.inlineByName.get(name);
+                if (local) defRange = local;
+              }
+              break;
+            }
+          }
+          if (!defRange) {
+            const decl = hb.declByName.get(name);
+            if (decl) {
+              const varRanges = getVariableRanges(text);
+              const full = varRanges.get(`handlebars::${name}`);
+              if (full) defRange = { start: full.start, end: full.end };
+              else defRange = { start: decl.nameStart, end: decl.nameEnd };
+              hoverLang = 'webpipe';
+            }
+          }
+          if (defRange) {
+            const snippet = text.slice(defRange.start, defRange.end);
+            const md = createMarkdownCodeBlock(hoverLang || 'webpipe', snippet);
+            return { contents: { kind: MarkupKind.Markdown, value: md } };
+          }
+        }
+      }
+    }
+  }
+
   return null;
 });
 
@@ -799,9 +966,26 @@ connection.onCodeLens((params): CodeLens[] => {
   }
 
   for (const [key, pos] of variablePositions.entries()) {
+    if (key.startsWith('handlebars::')) continue;
     const refs = variableRefs.get(key) || [];
     const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
     const locations = refs.map(r => Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
+    lenses.push({
+      range,
+      command: {
+        title: `${locations.length} reference${locations.length === 1 ? '' : 's'}`,
+        command: 'webpipe.showReferences',
+        arguments: [doc.uri, range.start, locations]
+      }
+    });
+  }
+
+  // Handlebars partial declarations: code lens counts from handlebars usages
+  const hb = collectHandlebarsSymbols(text);
+  for (const [name, decl] of hb.declByName.entries()) {
+    const range = { start: doc.positionAt(decl.nameStart), end: doc.positionAt(decl.nameEnd) };
+    const uses = hb.usagesByName.get(name) || [];
+    const locations = uses.map(u => Location.create(doc.uri, { start: doc.positionAt(u.start), end: doc.positionAt(u.end) }));
     lenses.push({
       range,
       command: {
@@ -882,6 +1066,7 @@ connection.onDefinition((params) => {
   if (!doc) return null;
   const text = doc.getText();
   const { variablePositions, pipelinePositions } = collectDeclarationPositions(text);
+  const hb = collectHandlebarsSymbols(text);
   const pos = params.position as Position;
   const offset = doc.offsetAt(pos);
   const wordInfo = getWordAt(text, offset);
@@ -958,6 +1143,31 @@ connection.onDefinition((params) => {
     if (hit) {
       const range = { start: doc.positionAt(hit.start), end: doc.positionAt(hit.start + hit.length) };
       return Location.create(doc.uri, range);
+    }
+  }
+
+  // Inside handlebars template content: go to partial definition
+  const withinContent = hb.contentRanges.some(r => offset >= r.start && offset <= r.end);
+  if (withinContent) {
+    // Look for usage under cursor and return its definition
+    for (const [name, uses] of hb.usagesByName.entries()) {
+      for (const u of uses) {
+        if (offset >= u.start && offset <= u.end) {
+          // Inline def in same content has priority
+          for (const entry of hb.inlineDefsByContent) {
+            if (offset >= entry.range.start && offset <= entry.range.end) {
+              const local = entry.inlineByName.get(name);
+              if (local) {
+                return Location.create(doc.uri, { start: doc.positionAt(local.start), end: doc.positionAt(local.end) });
+              }
+            }
+          }
+          const decl = hb.declByName.get(name);
+          if (decl) {
+            return Location.create(doc.uri, { start: doc.positionAt(decl.nameStart), end: doc.positionAt(decl.nameEnd) });
+          }
+        }
+      }
     }
   }
 
