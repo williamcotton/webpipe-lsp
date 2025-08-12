@@ -388,7 +388,7 @@ export class DocumentValidator {
       const lineStart = m.index + (m[1] ? m[1].length : 0);
       const tail = m[3];
       const head = `contentType${tail}`.trim();
-      if (!/^contentType\s+is\s+"[^"]+"\$/.test(head)) {
+      if (!/^contentType\s+is\s+"[^"]+"$/.test(head)) {
         push(DiagnosticSeverity.Error, lineStart + m[0].indexOf('contentType'), lineStart + m[0].length, 'Malformed contentType assertion. Expected: then|and contentType is "<type>"');
       }
     }
