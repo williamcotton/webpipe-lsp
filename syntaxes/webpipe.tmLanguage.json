@@ -733,7 +733,7 @@
         },
         {
           "name": "keyword.control.bdd.helper.webpipe",
-          "match": "\\b(executing|calling|input|output|equals|contains|matches|in|status|mock|returning)\\b"
+          "match": "\\b(executing|calling|input|output|contentType|equals|contains|matches|in|status|mock|returning)\\b"
         }
       ]
     },
