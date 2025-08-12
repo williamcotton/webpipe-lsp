@@ -10,7 +10,10 @@ import {
   CompletionItem,
   CompletionItemKind,
   Position,
-  Location
+  Location,
+  CodeLens,
+  DocumentHighlight,
+  DocumentHighlightKind
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
@@ -22,6 +25,9 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       completionProvider: { triggerCharacters: [':', ' ', '\t'] },
+      codeLensProvider: { resolveProvider: false },
+      documentHighlightProvider: true,
+      referencesProvider: true,
       definitionProvider: true,
       // Additional features (hovers, etc.) can be added over time
     }
@@ -507,6 +513,290 @@ connection.onCompletion((params): CompletionItem[] => {
   return [];
 });
 
+function collectReferencePositions(text: string): {
+  variableRefs: Map<string, Array<{ start: number; length: number }>>;
+  pipelineRefs: Map<string, Array<{ start: number; length: number }>>;
+} {
+  const variableRefs = new Map<string, Array<{ start: number; length: number }>>();
+  const pipelineRefs = new Map<string, Array<{ start: number; length: number }>>();
+
+  const pushVar = (key: string, start: number, length: number) => {
+    if (!variableRefs.has(key)) variableRefs.set(key, []);
+    variableRefs.get(key)!.push({ start, length });
+  };
+  const pushPipe = (name: string, start: number, length: number) => {
+    if (!pipelineRefs.has(name)) pipelineRefs.set(name, []);
+    pipelineRefs.get(name)!.push({ start, length });
+  };
+
+  // |> pipeline: <name>
+  const pipeRefRe = /(^|\n)(\s*\|>\s*pipeline\s*:\s*)([A-Za-z_][\w-]*)/g;
+  for (let m; (m = pipeRefRe.exec(text)); ) {
+    const name = m[3];
+    const prefixLen = (m[1] ? m[1].length : 0) + m[2].length;
+    const start = m.index + prefixLen;
+    pushPipe(name, start, name.length);
+  }
+
+  // when executing pipeline <name>
+  const whenPipeRe = /(^|\n)(\s*when\s+executing\s+pipeline\s+)([A-Za-z_][\w-]*)/g;
+  for (let m; (m = whenPipeRe.exec(text)); ) {
+    const name = m[3];
+    const prefixLen = (m[1] ? m[1].length : 0) + m[2].length;
+    const start = m.index + prefixLen;
+    pushPipe(name, start, name.length);
+  }
+
+  // with/and mock pipeline <name> returning `...`
+  const mockPipeRe = /(^|\n)(\s*(?:with|and)\s+mock\s+pipeline\s+)([A-Za-z_][\w-]*)\s+returning\s+`/g;
+  for (let m; (m = mockPipeRe.exec(text)); ) {
+    const name = m[3];
+    const prefixLen = (m[1] ? m[1].length : 0) + m[2].length;
+    const start = m.index + prefixLen;
+    pushPipe(name, start, name.length);
+  }
+
+  // |> <step>: <var>
+  const stepVarRe = /(^|\n)(\s*\|>\s*([A-Za-z_][\w-]*)\s*:\s*)([A-Za-z_][\w-]*)/g;
+  for (let m; (m = stepVarRe.exec(text)); ) {
+    const stepType = m[3];
+    if (stepType === 'pipeline') continue;
+    const varName = m[4];
+    const key = `${stepType}::${varName}`;
+    const prefixLen = (m[1] ? m[1].length : 0) + m[2].length;
+    const start = m.index + prefixLen;
+    pushVar(key, start, varName.length);
+  }
+
+  // when executing variable <type> <name>
+  const whenVarRe = /(^|\n)(\s*when\s+executing\s+variable\s+([A-Za-z_][\w-]*)\s+)([A-Za-z_][\w-]*)/g;
+  for (let m; (m = whenVarRe.exec(text)); ) {
+    const varType = m[3];
+    const varName = m[4];
+    const key = `${varType}::${varName}`;
+    const prefixLen = (m[1] ? m[1].length : 0) + m[2].length;
+    const start = m.index + prefixLen;
+    pushVar(key, start, varName.length);
+  }
+
+  // with/and mock <type>.<name> returning `...`
+  const mockVarRe = /(^|\n)(\s*(?:with|and)\s+mock\s+([A-Za-z_][\w-]*)\.)([A-Za-z_][\w-]*)\s+returning\s+`/g;
+  for (let m; (m = mockVarRe.exec(text)); ) {
+    const varType = m[3];
+    const varName = m[4];
+    const key = `${varType}::${varName}`;
+    const prefixLen = (m[1] ? m[1].length : 0) + m[2].length;
+    const start = m.index + prefixLen;
+    pushVar(key, start, varName.length);
+  }
+
+  return { variableRefs, pipelineRefs };
+}
+
+connection.onReferences((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const text = doc.getText();
+  const { variablePositions, pipelinePositions } = collectDeclarationPositions(text);
+  const { variableRefs, pipelineRefs } = collectReferencePositions(text);
+  const pos = params.position as Position;
+  const offset = doc.offsetAt(pos);
+  const wordInfo = getWordAt(text, offset);
+  if (!wordInfo) return null;
+  const { word } = wordInfo;
+  const includeDecl = !!(params as any).context?.includeDeclaration;
+
+  const lineStart = text.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  const nextNl = text.indexOf('\n', offset);
+  const lineEnd = nextNl === -1 ? text.length : nextNl;
+  const lineText = text.slice(lineStart, lineEnd);
+
+  const results: Location[] = [];
+
+  const addDeclAndRefsForPipeline = (name: string) => {
+    if (includeDecl) {
+      const decl = pipelinePositions.get(name);
+      if (decl) results.push(Location.create(doc.uri, { start: doc.positionAt(decl.start), end: doc.positionAt(decl.start + decl.length) }));
+    }
+    const refs = pipelineRefs.get(name) || [];
+    for (const r of refs) results.push(Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
+  };
+
+  const addDeclAndRefsForVariable = (key: string) => {
+    if (includeDecl) {
+      const decl = variablePositions.get(key);
+      if (decl) results.push(Location.create(doc.uri, { start: doc.positionAt(decl.start), end: doc.positionAt(decl.start + decl.length) }));
+    }
+    const refs = variableRefs.get(key) || [];
+    for (const r of refs) results.push(Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
+  };
+
+  // Determine identity based on context
+  // Pipeline decl
+  let m: RegExpExecArray | null;
+  if ((m = /^\s*pipeline\s+([A-Za-z_][\w-]*)\s*=/.exec(lineText))) {
+    if (word === m[1]) {
+      addDeclAndRefsForPipeline(m[1]);
+      return results;
+    }
+  }
+
+  // Variable decl
+  if ((m = /^\s*([A-Za-z_][\w-]*)\s+([A-Za-z_][\w-]*)\s*=\s*`/.exec(lineText))) {
+    const varType = m[1];
+    const varName = m[2];
+    if (word === varName) {
+      addDeclAndRefsForVariable(`${varType}::${varName}`);
+      return results;
+    }
+  }
+
+  // |> pipeline: <name>
+  if (/^\s*\|>\s*pipeline\s*:/.test(lineText)) {
+    addDeclAndRefsForPipeline(word);
+    return results.length ? results : null;
+  }
+
+  // |> <stepType>: <varName>
+  if ((m = /^\s*\|>\s*([A-Za-z_][\w-]*)\s*:\s*([A-Za-z_][\w-]*)?/.exec(lineText))) {
+    const stepType = m[1];
+    if (stepType !== 'pipeline') {
+      addDeclAndRefsForVariable(`${stepType}::${word}`);
+      return results.length ? results : null;
+    }
+  }
+
+  // when executing pipeline <name>
+  if (/^\s*when\s+executing\s+pipeline\s+/.test(lineText)) {
+    addDeclAndRefsForPipeline(word);
+    return results.length ? results : null;
+  }
+
+  // when executing variable <type> <name>
+  if ((m = /^\s*when\s+executing\s+variable\s+([A-Za-z_][\w-]*)\s+([A-Za-z_][\w-]*)/.exec(lineText))) {
+    const varType = m[1];
+    addDeclAndRefsForVariable(`${varType}::${word}`);
+    return results.length ? results : null;
+  }
+
+  // with/and mock pipeline <name> returning `...`
+  if (/^\s*(with|and)\s+mock\s+pipeline\s+/.test(lineText)) {
+    addDeclAndRefsForPipeline(word);
+    return results.length ? results : null;
+  }
+
+  // with/and mock <type>.<name> returning `...`
+  if ((m = /^\s*(with|and)\s+mock\s+([A-Za-z_][\w-]*)\.([A-Za-z_][\w-]*)/.exec(lineText))) {
+    const varType = m[2];
+    addDeclAndRefsForVariable(`${varType}::${word}`);
+    return results.length ? results : null;
+  }
+
+  return null;
+});
+
+connection.onCodeLens((params): CodeLens[] => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  const text = doc.getText();
+  const { variablePositions, pipelinePositions } = collectDeclarationPositions(text);
+  const { variableRefs, pipelineRefs } = collectReferencePositions(text);
+
+  const lenses: CodeLens[] = [];
+
+  for (const [name, pos] of pipelinePositions.entries()) {
+    const refs = pipelineRefs.get(name) || [];
+    const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
+    const locations = refs.map(r => Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
+    lenses.push({
+      range,
+      command: {
+        title: `${locations.length} reference${locations.length === 1 ? '' : 's'}`,
+        command: 'webpipe.showReferences',
+        arguments: [doc.uri, range.start, locations]
+      }
+    });
+  }
+
+  for (const [key, pos] of variablePositions.entries()) {
+    const refs = variableRefs.get(key) || [];
+    const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
+    const locations = refs.map(r => Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
+    lenses.push({
+      range,
+      command: {
+        title: `${locations.length} reference${locations.length === 1 ? '' : 's'}`,
+        command: 'webpipe.showReferences',
+        arguments: [doc.uri, range.start, locations]
+      }
+    });
+  }
+
+  return lenses;
+});
+
+connection.onDocumentHighlight((params): DocumentHighlight[] | null => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const text = doc.getText();
+  const { variablePositions, pipelinePositions } = collectDeclarationPositions(text);
+  const { variableRefs, pipelineRefs } = collectReferencePositions(text);
+  const pos = params.position as Position;
+  const offset = doc.offsetAt(pos);
+  const wordInfo = getWordAt(text, offset);
+  if (!wordInfo) return null;
+  const { word } = wordInfo;
+
+  const lineStart = text.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  const nextNl = text.indexOf('\n', offset);
+  const lineEnd = nextNl === -1 ? text.length : nextNl;
+  const lineText = text.slice(lineStart, lineEnd);
+
+  const highlights: DocumentHighlight[] = [];
+  const addRanges = (decl: { start: number; length: number } | undefined, refs: Array<{ start: number; length: number }>) => {
+    if (decl) {
+      highlights.push({ range: { start: doc.positionAt(decl.start), end: doc.positionAt(decl.start + decl.length) }, kind: DocumentHighlightKind.Write });
+    }
+    for (const r of refs) {
+      highlights.push({ range: { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }, kind: DocumentHighlightKind.Read });
+    }
+  };
+
+  // Pipelines
+  if (/^\s*\|>\s*pipeline\s*:/.test(lineText) || /^\s*when\s+executing\s+pipeline\s+/.test(lineText) || /^\s*(with|and)\s+mock\s+pipeline\s+/.test(lineText) || /^\s*pipeline\s+[A-Za-z_][\w-]*\s*=/.test(lineText)) {
+    const decl = pipelinePositions.get(word);
+    const refs = pipelineRefs.get(word) || [];
+    addRanges(decl, refs);
+    return highlights.length ? highlights : null;
+  }
+
+  // Variables
+  let m: RegExpExecArray | null;
+  if ((m = /^\s*([A-Za-z_][\w-]*)\s+([A-Za-z_][\w-]*)\s*=\s*`/.exec(lineText))) {
+    const varType = m[1];
+    const key = `${varType}::${word}`;
+    const decl = variablePositions.get(key);
+    const refs = variableRefs.get(key) || [];
+    addRanges(decl, refs);
+    return highlights.length ? highlights : null;
+  }
+  if (/^\s*\|>\s*([A-Za-z_][\w-]*)\s*:/.test(lineText) || /^\s*when\s+executing\s+variable\s+/.test(lineText) || /^\s*(with|and)\s+mock\s+[A-Za-z_][\w-]*\./.test(lineText)) {
+    // Try both: assume the step type is the first identifier after |> or after 'variable'
+    const stepTypeMatch = /^\s*\|>\s*([A-Za-z_][\w-]*)\s*:/.exec(lineText);
+    const execVarMatch = /^\s*when\s+executing\s+variable\s+([A-Za-z_][\w-]*)\s+/.exec(lineText);
+    const mockTypeMatch = /^\s*(with|and)\s+mock\s+([A-Za-z_][\w-]*)\./.exec(lineText);
+    const varType = (stepTypeMatch && stepTypeMatch[1] !== 'pipeline') ? stepTypeMatch[1] : (execVarMatch ? execVarMatch[1] : (mockTypeMatch ? mockTypeMatch[2] : undefined));
+    if (varType) {
+      const key = `${varType}::${word}`;
+      const decl = variablePositions.get(key);
+      const refs = variableRefs.get(key) || [];
+      addRanges(decl, refs);
+      return highlights.length ? highlights : null;
+    }
+  }
+
+  return null;
+});
 connection.onDefinition((params) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return null;
