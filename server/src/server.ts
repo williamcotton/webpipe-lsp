@@ -6,7 +6,10 @@ import {
   TextDocumentSyncKind,
   InitializeResult,
   Diagnostic,
-  DiagnosticSeverity
+  DiagnosticSeverity,
+  CompletionItem,
+  CompletionItemKind,
+  Position
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
@@ -17,10 +20,35 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
   return {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
-      // Completions, hovers, etc. can be added over time
+      completionProvider: { triggerCharacters: [':', ' ', '\t'] },
+      // Additional features (hovers, etc.) can be added over time
     }
   };
 });
+
+function collectVariablesAndPipelines(text: string): {
+  variablesByType: Map<string, Set<string>>;
+  pipelineNames: Set<string>;
+} {
+  // Variables: <type> <name> = `...`
+  const varDeclRe = /(^|\n)\s*([A-Za-z_][\w-]*)\s+([A-Za-z_][\w-]*)\s*=\s*`[\s\S]*?`/g;
+  const variablesByType = new Map<string, Set<string>>();
+  for (let m; (m = varDeclRe.exec(text)); ) {
+    const varType = m[2];
+    const varName = m[3];
+    if (!variablesByType.has(varType)) variablesByType.set(varType, new Set());
+    variablesByType.get(varType)!.add(varName);
+  }
+
+  // Pipelines: pipeline <name> =
+  const pipeDeclRe = /(^|\n)\s*pipeline\s+([A-Za-z_][\w-]*)\s*=/g;
+  const pipelineNames = new Set<string>();
+  for (let m; (m = pipeDeclRe.exec(text)); ) {
+    pipelineNames.add(m[2]);
+  }
+
+  return { variablesByType, pipelineNames };
+}
 
 async function validateDocument(doc: TextDocument) {
   const text = doc.getText();
@@ -379,6 +407,66 @@ connection.onInitialized(() => {
   for (const doc of documents.all()) {
     validateDocument(doc);
   }
+});
+
+connection.onCompletion((params): CompletionItem[] => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  const text = doc.getText();
+  const { variablesByType, pipelineNames } = collectVariablesAndPipelines(text);
+
+  const pos = params.position as Position;
+  const offset = doc.offsetAt(pos);
+  const startOfLine = text.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  const linePrefix = text.slice(startOfLine, offset);
+
+  // Match pipeline reference line: |> pipeline: <name>
+  const pipeLineRe = /^\s*\|>\s*pipeline\s*:\s*([A-Za-z_][\w-]*)?$/;
+  const pm = pipeLineRe.exec(linePrefix);
+  if (pm) {
+    const typed = pm[1] || '';
+    const typedLen = typed.length;
+    const colonIdx = linePrefix.lastIndexOf(':');
+    const varStartInLine = linePrefix.length - typedLen; // start of typed token
+    const between = linePrefix.slice(colonIdx + 1, varStartInLine);
+    const needsSpace = !/\s/.test(between);
+    const startAbs = startOfLine + varStartInLine;
+    const endAbs = offset;
+    const range = { start: doc.positionAt(startAbs), end: doc.positionAt(endAbs) };
+    return Array.from(pipelineNames).map<CompletionItem>(name => ({
+      label: name,
+      kind: CompletionItemKind.Function,
+      textEdit: { range, newText: (needsSpace ? ' ' : '') + name }
+    }));
+  }
+
+  // Match step variable reference line: |> <step>: <var>
+  const stepVarLineRe = /^\s*\|>\s*([A-Za-z_][\w-]*)\s*:\s*([A-Za-z_][\w-]*)?$/;
+  const m = stepVarLineRe.exec(linePrefix);
+  if (m) {
+    const stepType = m[1];
+    const typed = m[2] || '';
+    const typedLen = typed.length;
+    if (stepType !== 'pipeline') {
+      const candidates = variablesByType.get(stepType);
+      if (candidates && candidates.size > 0) {
+        const colonIdx = linePrefix.lastIndexOf(':');
+        const varStartInLine = linePrefix.length - typedLen; // start of typed token
+        const between = linePrefix.slice(colonIdx + 1, varStartInLine);
+        const needsSpace = !/\s/.test(between);
+        const startAbs = startOfLine + varStartInLine;
+        const endAbs = offset;
+        const range = { start: doc.positionAt(startAbs), end: doc.positionAt(endAbs) };
+        return Array.from(candidates).map<CompletionItem>(name => ({
+          label: name,
+          kind: CompletionItemKind.Variable,
+          textEdit: { range, newText: (needsSpace ? ' ' : '') + name }
+        }));
+      }
+    }
+  }
+
+  return [];
 });
 
 documents.listen(connection);
