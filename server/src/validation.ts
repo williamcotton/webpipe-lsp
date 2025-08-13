@@ -67,6 +67,8 @@ export class DocumentValidator {
       this.validateRouteReferences(text, routePatterns, push);
       this.validateJsonBlocks(text, push);
       this.validateMiddlewareReferences(text, push);
+      this.validateConfigBlocks(text, push);
+      this.validateUnknownVariableTypes(text, push);
       this.validateAuthFlows(text, push);
       this.validateResultBlocks(text, push);
       this.validateAssertions(text, push);
@@ -75,6 +77,38 @@ export class DocumentValidator {
       
     } catch (_e) {
       // Best-effort validation; avoid crashing on regex issues
+    }
+  }
+
+  private validateUnknownVariableTypes(text: string, push: DiagnosticPush): void {
+    const varDeclRe = new RegExp(REGEX_PATTERNS.VAR_DECL.source, REGEX_PATTERNS.VAR_DECL.flags);
+    for (let m; (m = varDeclRe.exec(text)); ) {
+      const varType = m[2];
+      if (!KNOWN_MIDDLEWARE.has(varType)) {
+        const typeStart = m.index + m[0].indexOf(varType);
+        push(
+          DiagnosticSeverity.Warning,
+          typeStart,
+          typeStart + varType.length,
+          `Unknown variable type '${varType}'. If this is custom middleware, ignore.`
+        );
+      }
+    }
+  }
+
+  private validateConfigBlocks(text: string, push: DiagnosticPush): void {
+    const configRe = /(^|\n)\s*config\s+([A-Za-z_][\w-]*)\s*\{/g;
+    for (let m; (m = configRe.exec(text)); ) {
+      const name = m[2];
+      if (!KNOWN_MIDDLEWARE.has(name)) {
+        const nameStart = m.index + m[0].lastIndexOf(name);
+        push(
+          DiagnosticSeverity.Error,
+          nameStart,
+          nameStart + name.length,
+          `Unknown middleware in config: ${name}`
+        );
+      }
     }
   }
 
