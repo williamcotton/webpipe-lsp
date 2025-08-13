@@ -436,18 +436,20 @@ export class DocumentValidator {
     const hb = collectHandlebarsSymbols(text);
     for (const [name, uses] of hb.usagesByName.entries()) {
       const hasGlobalDecl = hb.declByName.has(name);
+      // Any inline decl anywhere in the file (best-effort since scope can cross into called partials)
+      const hasAnyInlineDecl = hb.inlineDefsByContent.some(entry => entry.inlineByName.has(name) || entry.inlineBlockByName.has(name));
       for (const u of uses) {
-        // Check for inline def within the same content block
-        let hasInlineDecl = false;
+        // Inline def within same content block
+        let hasInlineDeclInSameBlock = false;
         for (const entry of hb.inlineDefsByContent) {
           if (u.start >= entry.range.start && u.start <= entry.range.end) {
             if (entry.inlineByName.has(name) || entry.inlineBlockByName.has(name)) {
-              hasInlineDecl = true;
+              hasInlineDeclInSameBlock = true;
             }
             break;
           }
         }
-        if (!hasInlineDecl && !hasGlobalDecl) {
+        if (!hasInlineDeclInSameBlock && !hasGlobalDecl && !hasAnyInlineDecl) {
           push(
             DiagnosticSeverity.Warning,
             u.start,
