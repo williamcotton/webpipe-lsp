@@ -10,6 +10,7 @@ import {
 import { getVariableRanges, getPipelineRanges } from './parser';
 import { getWordAt, createMarkdownCodeBlock } from './utils';
 import { RangeAbs } from './types';
+import { getMiddlewareDoc, formatMiddlewareHover } from './middleware-docs';
 
 export class LanguageProviders {
   onReferences(params: ReferenceParams, documents: Map<string, TextDocument>): Location[] | null {
@@ -79,6 +80,10 @@ export class LanguageProviders {
     const nextNl = text.indexOf('\n', offset);
     const lineEnd = nextNl === -1 ? text.length : nextNl;
     const lineText = text.slice(lineStart, lineEnd);
+
+    // Middleware hover (check first, before pipeline)
+    const middlewareHover = this.getMiddlewareHover(lineText, word);
+    if (middlewareHover) return middlewareHover;
 
     // Pipeline hover
     if (this.isPipelineContext(lineText)) {
@@ -398,5 +403,43 @@ export class LanguageProviders {
     let snippet = text.slice(r.start, r.end).trimEnd();
     if (snippet.length > 2400) snippet = snippet.slice(0, 2400) + '\n…';
     return createMarkdownCodeBlock('webpipe', snippet);
+  }
+
+  private getMiddlewareHover(lineText: string, word: string): Hover | null {
+    // Check if this line contains a pipeline step with middleware name
+    // Pattern: |> middlewareName: (config)
+    const middlewareMatch = /^\s*\|>\s*([A-Za-z_][\w-]*)\s*:/.exec(lineText);
+    if (middlewareMatch && middlewareMatch[1] === word) {
+      // This is a middleware name in a pipeline step
+      const middlewareDoc = getMiddlewareDoc(word);
+      if (middlewareDoc) {
+        const md = formatMiddlewareHover(middlewareDoc);
+        return { contents: { kind: MarkupKind.Markdown, value: md } };
+      }
+    }
+
+    // Check for result step (special case - no colon)
+    // Pattern: |> result
+    const resultMatch = /^\s*\|>\s*(result)\s*$/.exec(lineText);
+    if (resultMatch && resultMatch[1] === word) {
+      const middlewareDoc = getMiddlewareDoc(word);
+      if (middlewareDoc) {
+        const md = formatMiddlewareHover(middlewareDoc);
+        return { contents: { kind: MarkupKind.Markdown, value: md } };
+      }
+    }
+
+    // Check for pipeline declaration
+    // Pattern: pipeline name =
+    const pipelineDeclarationMatch = /^\s*(pipeline)\s+[A-Za-z_][\w-]*\s*=/.exec(lineText);
+    if (pipelineDeclarationMatch && pipelineDeclarationMatch[1] === word) {
+      const middlewareDoc = getMiddlewareDoc(word);
+      if (middlewareDoc) {
+        const md = formatMiddlewareHover(middlewareDoc);
+        return { contents: { kind: MarkupKind.Markdown, value: md } };
+      }
+    }
+
+    return null;
   }
 }
