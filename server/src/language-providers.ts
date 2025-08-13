@@ -7,7 +7,7 @@ import {
   collectReferencePositions, 
   collectHandlebarsSymbols 
 } from './symbol-collector';
-import { getVariableRanges, getPipelineRanges } from './parser';
+import { getVariableRanges, getPipelineRanges } from 'webpipe-js';
 import { getWordAt, createMarkdownCodeBlock } from './utils';
 import { RangeAbs } from './types';
 import { getMiddlewareDoc, formatMiddlewareHover } from './middleware-docs';

@@ -8,7 +8,7 @@ import {
   collectHandlebarsSymbols 
 } from './symbol-collector';
 import { getWordAt } from './utils';
-import { getVariableRanges, getPipelineRanges } from './parser';
+import { getVariableRanges, getPipelineRanges } from 'webpipe-js';
 
 export class UIProviders {
   onCodeLens(params: CodeLensParams, documents: Map<string, TextDocument>): CodeLens[] {

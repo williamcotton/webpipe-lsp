@@ -1,8 +1,8 @@
 {
-  "name": "wp",
+  "name": "webpipe",
   "displayName": "Web Pipe",
   "description": "Web Pipe",
-  "version": "0.0.1",
+  "version": "0.1.1",
   "publisher": "williamcotton",
   "author": {
     "name": "William Cotton",
@@ -32,34 +32,44 @@
     "vscode:prepublish": "npm run compile"
   },
   "contributes": {
-    "languages": [{
-      "id": "webpipe",
-      "aliases": ["Web Pipe", "webpipe"],
-      "extensions": [".wp"],
-      "configuration": "./language-configuration.json"
-    }],
-    "grammars": [{
-      "language": "webpipe",
-      "scopeName": "source.webpipe",
-      "path": "./syntaxes/webpipe.tmLanguage.json",
-      "embeddedLanguages": {
-        "meta.embedded.block.html": "html",
-        "meta.embedded.block.css": "css",
-        "meta.embedded.block.sql": "sql",
-        "meta.embedded.block.jq": "jq",
-        "meta.embedded.block.lua": "lua",
-        "meta.embedded.block.mustache": "mustache"
+    "languages": [
+      {
+        "id": "webpipe",
+        "aliases": [
+          "Web Pipe",
+          "webpipe"
+        ],
+        "extensions": [
+          ".wp"
+        ],
+        "configuration": "./language-configuration.json"
       }
-    }]
+    ],
+    "grammars": [
+      {
+        "language": "webpipe",
+        "scopeName": "source.webpipe",
+        "path": "./syntaxes/webpipe.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.html": "html",
+          "meta.embedded.block.css": "css",
+          "meta.embedded.block.sql": "sql",
+          "meta.embedded.block.jq": "jq",
+          "meta.embedded.block.lua": "lua",
+          "meta.embedded.block.mustache": "mustache"
+        }
+      }
+    ]
   },
   "devDependencies": {
     "@types/node": "^18.19.39",
-    "typescript": "^5.5.4",
-    "@types/vscode": "^1.89.0"
+    "@types/vscode": "^1.89.0",
+    "typescript": "^5.5.4"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1",
     "vscode-languageserver": "^9.0.1",
-    "vscode-languageserver-textdocument": "^1.0.11"
+    "vscode-languageserver-textdocument": "^1.0.11",
+    "webpipe-js": "^0.1.1"
   }
 }

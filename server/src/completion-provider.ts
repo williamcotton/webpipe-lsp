@@ -1,6 +1,6 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { CompletionItem, CompletionItemKind, Position, CompletionParams } from 'vscode-languageserver/node';
-import { parseProgram } from './parser';
+import { parseProgram } from 'webpipe-js';
 
 export class CompletionProvider {
   onCompletion(params: CompletionParams, documents: Map<string, TextDocument>): CompletionItem[] {
