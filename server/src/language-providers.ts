@@ -11,6 +11,7 @@ import { getVariableRanges, getPipelineRanges } from './parser';
 import { getWordAt, createMarkdownCodeBlock } from './utils';
 import { RangeAbs } from './types';
 import { getMiddlewareDoc, formatMiddlewareHover } from './middleware-docs';
+import { getConfigDoc, formatConfigHover } from './config-docs';
 
 export class LanguageProviders {
   onReferences(params: ReferenceParams, documents: Map<string, TextDocument>): Location[] | null {
@@ -81,7 +82,11 @@ export class LanguageProviders {
     const lineEnd = nextNl === -1 ? text.length : nextNl;
     const lineText = text.slice(lineStart, lineEnd);
 
-    // Middleware hover (check first, before pipeline)
+    // Config hover (check first)
+    const configHover = this.getConfigHover(lineText, word);
+    if (configHover) return configHover;
+
+    // Middleware hover (check second, before pipeline)
     const middlewareHover = this.getMiddlewareHover(lineText, word);
     if (middlewareHover) return middlewareHover;
 
@@ -436,6 +441,22 @@ export class LanguageProviders {
       const middlewareDoc = getMiddlewareDoc(word);
       if (middlewareDoc) {
         const md = formatMiddlewareHover(middlewareDoc);
+        return { contents: { kind: MarkupKind.Markdown, value: md } };
+      }
+    }
+
+    return null;
+  }
+
+  private getConfigHover(lineText: string, word: string): Hover | null {
+    // Check if this line contains a config declaration
+    // Pattern: config middlewareName {
+    const configMatch = /^\s*config\s+([A-Za-z_][\w-]*)\s*\{/.exec(lineText);
+    if (configMatch && configMatch[1] === word) {
+      // This is a config name in a config declaration
+      const configDoc = getConfigDoc(word);
+      if (configDoc) {
+        const md = formatConfigHover(configDoc);
         return { contents: { kind: MarkupKind.Markdown, value: md } };
       }
     }

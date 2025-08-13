@@ -123,13 +123,16 @@ export const middlewareDocs: Record<string, MiddlewareDoc> = {
     name: 'handlebars',
     description: 'Render strings using Handlebars templates.',
     behavior: [
-      'Supports inline partials via `{{#*inline "name"}}...{{/inline}}`'
+      'Supports inline partials via `{{#*inline "name"}}...{{/inline}}`',
+      'Can use partials defined in `mustache` or `handlebars` variable blocks',
+      'Partials are referenced with `{{> partialName}}`'
     ],
     errors: [
       '`{ type: "MiddlewareExecutionError", message }`'
     ],
     examples: [
-      'GET /hello\n  |> jq: `{ name: "World" }`\n  |> handlebars: `<p>Hello, {{name}}</p>`'
+      'mustache userCard = `\n  <div class="user-card">\n    <h3>{{name}}</h3>\n    <p>{{email}}</p>\n  </div>\n`\n\nGET /profile\n  |> jq: `{ name: "Alice", email: "alice@example.com" }`\n  |> handlebars: `\n    <div class="profile">\n      {{> userCard}}\n      <p>Welcome back!</p>\n    </div>\n  `',
+      'handlebars layout = `\n  <!DOCTYPE html>\n  <html>\n    <head><title>{{title}}</title></head>\n    <body>{{> content}}</body>\n  </html>\n`\n\nmustache content = `\n  <main>\n    <h1>{{heading}}</h1>\n    <p>{{message}}</p>\n  </main>\n`\n\nGET /page\n  |> jq: `{ title: "My Page", heading: "Welcome", message: "Hello World" }`\n  |> handlebars: `{{> layout}}`'
     ]
   },
 

@@ -419,7 +419,7 @@ export class DocumentValidator {
       const step = m[2];
       if (!KNOWN_STEPS.has(step)) {
         const stepStart = m.index + m[0].indexOf(step);
-        push(DiagnosticSeverity.Information, stepStart, stepStart + step.length, `Unknown step '${step}'. If this is custom middleware, ignore.`);
+        push(DiagnosticSeverity.Warning, stepStart, stepStart + step.length, `Unknown step '${step}'. If this is custom middleware, ignore.`);
       }
     }
   }
