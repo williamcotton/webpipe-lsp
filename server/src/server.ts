@@ -34,7 +34,7 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
   return {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
-      completionProvider: { triggerCharacters: [':', ' ', '\t'] },
+      completionProvider: { triggerCharacters: [':', ' ', '\t', '>'] },
       codeLensProvider: { resolveProvider: false },
       documentHighlightProvider: true,
       hoverProvider: true,
