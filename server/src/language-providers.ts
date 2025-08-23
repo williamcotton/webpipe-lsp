@@ -7,11 +7,11 @@ import {
   collectReferencePositions, 
   collectHandlebarsSymbols 
 } from './symbol-collector';
-import { getVariableRanges, getPipelineRanges } from 'webpipe-js';
 import { getWordAt, createMarkdownCodeBlock } from './utils';
 import { RangeAbs } from './types';
 import { getMiddlewareDoc, formatMiddlewareHover } from './middleware-docs';
 import { getConfigDoc, formatConfigHover } from './config-docs';
+import { createDocumentModel } from './document-model';
 
 export class LanguageProviders {
   onReferences(params: ReferenceParams, documents: Map<string, TextDocument>): Location[] | null {
@@ -19,16 +19,9 @@ export class LanguageProviders {
     if (!doc) return null;
     
     const text = doc.getText();
-    const variableRanges = getVariableRanges(text);
-    const pipelineRanges = getPipelineRanges(text);
-    const variablePositions = new Map<string, { start: number; length: number }>();
-    for (const [key, r] of variableRanges.entries()) {
-      variablePositions.set(key, { start: r.start, length: r.end - r.start });
-    }
-    const pipelinePositions = new Map<string, { start: number; length: number }>();
-    for (const [name, r] of pipelineRanges.entries()) {
-      pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
-    }
+    const documentModel = createDocumentModel(text);
+    const variablePositions = documentModel.variablePositions;
+    const pipelinePositions = documentModel.pipelinePositions;
     const { variableRefs, pipelineRefs } = collectReferencePositions(text);
     const hb = collectHandlebarsSymbols(text);
     const pos = params.position as Position;
@@ -71,6 +64,7 @@ export class LanguageProviders {
     if (!doc) return null;
     
     const text = doc.getText();
+    const documentModel = createDocumentModel(text);
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);
     const wordInfo = getWordAt(text, offset);
@@ -101,7 +95,7 @@ export class LanguageProviders {
     if (variableHover) return variableHover;
 
     // Handlebars partial hover
-    const handlebarsHover = this.getHandlebarsHover(text, offset, word, doc);
+    const handlebarsHover = this.getHandlebarsHover(documentModel, offset, word, doc);
     if (handlebarsHover) return handlebarsHover;
 
     return null;
@@ -112,16 +106,9 @@ export class LanguageProviders {
     if (!doc) return null;
     
     const text = doc.getText();
-    const variableRanges = getVariableRanges(text);
-    const pipelineRanges = getPipelineRanges(text);
-    const variablePositions = new Map<string, { start: number; length: number }>();
-    for (const [key, r] of variableRanges.entries()) {
-      variablePositions.set(key, { start: r.start, length: r.end - r.start });
-    }
-    const pipelinePositions = new Map<string, { start: number; length: number }>();
-    for (const [name, r] of pipelineRanges.entries()) {
-      pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
-    }
+    const documentModel = createDocumentModel(text);
+    const variablePositions = documentModel.variablePositions;
+    const pipelinePositions = documentModel.pipelinePositions;
     const hb = collectHandlebarsSymbols(text);
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);
@@ -299,7 +286,8 @@ export class LanguageProviders {
     return null;
   }
 
-  private getHandlebarsHover(text: string, offset: number, word: string, doc: TextDocument): Hover | null {
+  private getHandlebarsHover(documentModel: any, offset: number, word: string, doc: TextDocument): Hover | null {
+    const text = doc.getText();
     const hb = collectHandlebarsSymbols(text);
     const withinContent = hb.contentRanges.some((r: RangeAbs) => offset >= r.start && offset <= r.end);
     
@@ -326,9 +314,9 @@ export class LanguageProviders {
           if (!defRange) {
             const decl = hb.declByName.get(name);
             if (decl) {
-              const varRanges = getVariableRanges(text);
-              const full = varRanges.get(`handlebars::${name}`);
-              if (full) defRange = { start: full.start, end: full.end };
+              const variablePositions = documentModel.variablePositions;
+              const full = variablePositions.get(`handlebars::${name}`);
+              if (full) defRange = { start: full.start, end: full.start + full.length };
               else defRange = { start: decl.nameStart, end: decl.nameEnd };
               hoverLang = 'webpipe';
             }
@@ -393,19 +381,29 @@ export class LanguageProviders {
   }
 
   private formatVariableHover(text: string, varType: string, varName: string): string | null {
-    const ranges = getVariableRanges(text);
-    const r = ranges.get(`${varType}::${varName}`);
+    const documentModel = createDocumentModel(text);
+    const r = documentModel.variablePositions.get(`${varType}::${varName}`);
     if (!r) return null;
-    let snippet = text.slice(r.start, r.end).trimEnd();
+    const rangeEnd = r.start + r.length;
+    // Get the full variable declaration by expanding to line boundaries
+    const lineStart = text.lastIndexOf('\n', r.start) + 1;
+    const lineEnd = text.indexOf('\n', rangeEnd);
+    const fullLineEnd = lineEnd === -1 ? text.length : lineEnd;
+    let snippet = text.slice(lineStart, fullLineEnd).trimEnd();
     if (snippet.length > 2400) snippet = snippet.slice(0, 2400) + '\n…';
     return createMarkdownCodeBlock('webpipe', snippet);
   }
 
   private formatPipelineHover(text: string, pipelineName: string): string | null {
-    const ranges = getPipelineRanges(text);
-    const r = ranges.get(pipelineName);
+    const documentModel = createDocumentModel(text);
+    const r = documentModel.pipelinePositions.get(pipelineName);
     if (!r) return null;
-    let snippet = text.slice(r.start, r.end).trimEnd();
+    const rangeEnd = r.start + r.length;
+    // Get the full pipeline declaration by expanding to line boundaries
+    const lineStart = text.lastIndexOf('\n', r.start) + 1;
+    const lineEnd = text.indexOf('\n', rangeEnd);
+    const fullLineEnd = lineEnd === -1 ? text.length : lineEnd;
+    let snippet = text.slice(lineStart, fullLineEnd).trimEnd();
     if (snippet.length > 2400) snippet = snippet.slice(0, 2400) + '\n…';
     return createMarkdownCodeBlock('webpipe', snippet);
   }

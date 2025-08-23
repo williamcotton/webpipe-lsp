@@ -8,7 +8,7 @@ import {
   collectHandlebarsSymbols 
 } from './symbol-collector';
 import { getWordAt } from './utils';
-import { getVariableRanges, getPipelineRanges } from 'webpipe-js';
+import { createDocumentModel } from './document-model';
 
 export class UIProviders {
   onCodeLens(params: CodeLensParams, documents: Map<string, TextDocument>): CodeLens[] {
@@ -16,16 +16,9 @@ export class UIProviders {
     if (!doc) return [];
     
     const text = doc.getText();
-    const variableRanges = getVariableRanges(text);
-    const pipelineRanges = getPipelineRanges(text);
-    const variablePositions = new Map<string, { start: number; length: number }>();
-    for (const [key, r] of variableRanges.entries()) {
-      variablePositions.set(key, { start: r.start, length: r.end - r.start });
-    }
-    const pipelinePositions = new Map<string, { start: number; length: number }>();
-    for (const [name, r] of pipelineRanges.entries()) {
-      pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
-    }
+    const documentModel = createDocumentModel(text);
+    const variablePositions = documentModel.variablePositions;
+    const pipelinePositions = documentModel.pipelinePositions;
     const { variableRefs, pipelineRefs } = collectReferencePositions(text);
     const lenses: CodeLens[] = [];
 
@@ -84,16 +77,9 @@ export class UIProviders {
     if (!doc) return null;
     
     const text = doc.getText();
-    const variableRanges = getVariableRanges(text);
-    const pipelineRanges = getPipelineRanges(text);
-    const variablePositions = new Map<string, { start: number; length: number }>();
-    for (const [key, r] of variableRanges.entries()) {
-      variablePositions.set(key, { start: r.start, length: r.end - r.start });
-    }
-    const pipelinePositions = new Map<string, { start: number; length: number }>();
-    for (const [name, r] of pipelineRanges.entries()) {
-      pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
-    }
+    const documentModel = createDocumentModel(text);
+    const variablePositions = documentModel.variablePositions;
+    const pipelinePositions = documentModel.pipelinePositions;
     const { variableRefs, pipelineRefs } = collectReferencePositions(text);
     const pos = params.position;
     const offset = doc.offsetAt(pos);
