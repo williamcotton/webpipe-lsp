@@ -3,6 +3,8 @@ import { Diagnostic, DiagnosticSeverity, Connection } from 'vscode-languageserve
 import { VALID_HTTP_METHODS, KNOWN_MIDDLEWARE, KNOWN_STEPS, REGEX_PATTERNS } from './constants';
 import { collectHandlebarsSymbols } from './symbol-collector';
 import { parseProgramWithDiagnostics } from 'webpipe-js';
+import { createDocumentModel } from './document-model';
+import { DocumentModel } from './types';
 
 interface DiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
@@ -46,9 +48,11 @@ export class DocumentValidator {
         });
       };
 
-      // Parse AST and include parser diagnostics
-      const { program, diagnostics: parseDiagnostics } = parseProgramWithDiagnostics(text);
-      for (const d of parseDiagnostics) {
+      // Create DocumentModel for structured parsing
+      const documentModel = createDocumentModel(text);
+      
+      // Include parser diagnostics from webpipe-js
+      for (const d of documentModel.diagnostics) {
         push(
           d.severity === 'error' ? DiagnosticSeverity.Error : d.severity === 'warning' ? DiagnosticSeverity.Warning : DiagnosticSeverity.Information,
           d.start,
@@ -57,13 +61,15 @@ export class DocumentValidator {
         );
       }
 
-      const { variablesByType, pipelineNames } = this.collectDeclarations(text, push, program);
+      // Check for duplicates using limited regex for precise positioning
+      this.validateDuplicateDeclarations(documentModel, push, text);
+      
       const routePatterns = this.validateRoutes(text, push);
       
-      this.validateStepReferences(text, variablesByType, push);
-      this.validatePipelineReferences(text, pipelineNames, push);
-      this.validateBDDReferences(text, variablesByType, pipelineNames, push);
-      this.validateMockReferences(text, variablesByType, pipelineNames, push);
+      this.validateStepReferences(text, documentModel.variablesByType, push);
+      this.validatePipelineReferences(text, documentModel.pipelineNames, push);
+      this.validateBDDReferences(text, documentModel.variablesByType, documentModel.pipelineNames, push);
+      this.validateMockReferences(text, documentModel.variablesByType, documentModel.pipelineNames, push);
       this.validateRouteReferences(text, routePatterns, push);
       this.validateJsonBlocks(text, push);
       this.validateMiddlewareReferences(text, push);
@@ -112,25 +118,11 @@ export class DocumentValidator {
     }
   }
 
-  private collectDeclarations(text: string, push: DiagnosticPush, program?: { variables: Array<{ varType: string; name: string }>; pipelines: Array<{ name: string }> }): {
-    variablesByType: Map<string, Set<string>>;
-    pipelineNames: Set<string>;
-  } {
-    // Prefer AST to build declarations
-    const variablesByType = new Map<string, Set<string>>();
-    const pipelineNames = new Set<string>();
-
-    if (program) {
-      for (const v of program.variables) {
-        if (!variablesByType.has(v.varType)) variablesByType.set(v.varType, new Set());
-        variablesByType.get(v.varType)!.add(v.name);
-      }
-      for (const p of program.pipelines) {
-        pipelineNames.add(p.name);
-      }
-    }
-
-    // Use regex only to locate duplicates precisely for diagnostics
+  private validateDuplicateDeclarations(documentModel: DocumentModel, push: DiagnosticPush, text: string): void {
+    // For now, use targeted regex to find duplicate positions, since webpipe-js range functions
+    // only return the last occurrence of each variable/pipeline
+    
+    // Check for duplicate variables
     const varDeclRe = new RegExp(REGEX_PATTERNS.VAR_DECL.source, REGEX_PATTERNS.VAR_DECL.flags);
     const varDeclSeen = new Set<string>();
     for (let m; (m = varDeclRe.exec(text)); ) {
@@ -144,6 +136,7 @@ export class DocumentValidator {
       varDeclSeen.add(key);
     }
 
+    // Check for duplicate pipelines
     const pipeDeclRe = new RegExp(REGEX_PATTERNS.PIPE_DECL.source, REGEX_PATTERNS.PIPE_DECL.flags);
     const pipelineSeen = new Set<string>();
     for (let m; (m = pipeDeclRe.exec(text)); ) {
@@ -154,8 +147,6 @@ export class DocumentValidator {
       }
       pipelineSeen.add(name);
     }
-
-    return { variablesByType, pipelineNames };
   }
 
   private validateRoutes(text: string, push: DiagnosticPush): Array<{ method: string; path: string; regex: RegExp }> {

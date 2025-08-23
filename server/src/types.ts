@@ -39,3 +39,22 @@ export interface WordInfo {
   start: number;
   end: number;
 }
+
+export interface DocumentModel {
+  // Raw program data from webpipe-js
+  program: any;
+  diagnostics: any[];
+  
+  // Indexed data for efficient lookup
+  variablesByType: Map<string, Set<string>>;
+  pipelineNames: Set<string>;
+  variablePositions: Map<string, PositionInfo>; // key format: "type::name"
+  pipelinePositions: Map<string, PositionInfo>; // key format: name
+  
+  // References (may still need some regex for complex cases)
+  variableRefs: Map<string, Array<PositionInfo>>;
+  pipelineRefs: Map<string, Array<PositionInfo>>;
+  
+  // Routes and other structures
+  routes: Array<{ method: string; path: string; lineNumber: number }>;
+}
