@@ -1,8 +1,8 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { CompletionItem, CompletionItemKind, Position, CompletionParams } from 'vscode-languageserver/node';
-import { parseProgram } from 'webpipe-js';
-import { KNOWN_MIDDLEWARE, KNOWN_STEPS, VALID_HTTP_METHODS, REGEX_PATTERNS } from './constants';
+import { KNOWN_MIDDLEWARE, KNOWN_STEPS, VALID_HTTP_METHODS } from './constants';
 import { collectHandlebarsSymbols } from './symbol-collector';
+import { createDocumentModel } from './document-model';
 
 export class CompletionProvider {
   onCompletion(params: CompletionParams, documents: Map<string, TextDocument>): CompletionItem[] {
@@ -10,13 +10,9 @@ export class CompletionProvider {
     if (!doc) return [];
     
     const text = doc.getText();
-    const program = parseProgram(text);
-    const variablesByType = new Map<string, Set<string>>();
-    for (const v of program.variables) {
-      if (!variablesByType.has(v.varType)) variablesByType.set(v.varType, new Set());
-      variablesByType.get(v.varType)!.add(v.name);
-    }
-    const pipelineNames = new Set<string>(program.pipelines.map(p => p.name));
+    const documentModel = createDocumentModel(text);
+    const variablesByType = documentModel.variablesByType;
+    const pipelineNames = documentModel.pipelineNames;
 
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);
@@ -48,7 +44,7 @@ export class CompletionProvider {
     if (testPipelineCompletion) return testPipelineCompletion;
 
     // Route method/path completion in tests
-    const routeCompletion = this.getWhenCallingCompletion(linePrefix, text, doc, startOfLine, offset);
+    const routeCompletion = this.getWhenCallingCompletion(linePrefix, documentModel, doc, startOfLine, offset);
     if (routeCompletion) return routeCompletion;
 
     // Handlebars partial completion inside template content
@@ -216,7 +212,7 @@ export class CompletionProvider {
 
   private getWhenCallingCompletion(
     linePrefix: string,
-    fullText: string,
+    documentModel: any,
     doc: TextDocument,
     startOfLine: number,
     offset: number
@@ -242,12 +238,12 @@ export class CompletionProvider {
     const typedPath = m[2] || '';
     if (!VALID_HTTP_METHODS.has(method)) return null;
 
-    const routeDeclRe = new RegExp(REGEX_PATTERNS.ROUTE_DECL.source, REGEX_PATTERNS.ROUTE_DECL.flags);
+    // Use routes from DocumentModel instead of regex scanning
     const paths: string[] = [];
-    for (let rm; (rm = routeDeclRe.exec(fullText)); ) {
-      const mth = rm[2];
-      const p = (rm[3] || '').trim();
-      if (mth === method) paths.push(p);
+    for (const route of documentModel.routes) {
+      if (route.method === method) {
+        paths.push(route.path);
+      }
     }
 
     const typedLen = typedPath.length;

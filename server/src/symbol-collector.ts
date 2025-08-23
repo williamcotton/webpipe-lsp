@@ -1,48 +1,20 @@
-import { REGEX_PATTERNS } from './constants';
 import { VariablesByType, DeclarationPositions, ReferencePositions, RangeAbs, HandlebarsSymbols } from './types';
+import { createDocumentModel } from './document-model';
 
 export function collectVariablesAndPipelines(text: string): VariablesByType {
-  const variablesByType = new Map<string, Set<string>>();
-  const varDeclRe = new RegExp(REGEX_PATTERNS.VAR_DECL.source, REGEX_PATTERNS.VAR_DECL.flags);
-  
-  for (let m; (m = varDeclRe.exec(text)); ) {
-    const varType = m[2];
-    const varName = m[3];
-    if (!variablesByType.has(varType)) variablesByType.set(varType, new Set());
-    variablesByType.get(varType)!.add(varName);
-  }
-
-  const pipeDeclRe = new RegExp(REGEX_PATTERNS.PIPE_DECL.source, REGEX_PATTERNS.PIPE_DECL.flags);
-  const pipelineNames = new Set<string>();
-  
-  for (let m; (m = pipeDeclRe.exec(text)); ) {
-    pipelineNames.add(m[2]);
-  }
-
-  return { variablesByType, pipelineNames };
+  const documentModel = createDocumentModel(text);
+  return {
+    variablesByType: documentModel.variablesByType,
+    pipelineNames: documentModel.pipelineNames
+  };
 }
 
 export function collectDeclarationPositions(text: string): DeclarationPositions {
-  const variablePositions = new Map<string, { start: number; length: number }>();
-  const varDeclRe = new RegExp(REGEX_PATTERNS.VAR_DECL.source, REGEX_PATTERNS.VAR_DECL.flags);
-  
-  for (let m; (m = varDeclRe.exec(text)); ) {
-    const varType = m[2];
-    const varName = m[3];
-    const nameStart = m.index + m[0].lastIndexOf(varName);
-    variablePositions.set(`${varType}::${varName}`, { start: nameStart, length: varName.length });
-  }
-
-  const pipelinePositions = new Map<string, { start: number; length: number }>();
-  const pipeDeclRe = new RegExp(REGEX_PATTERNS.PIPE_DECL.source, REGEX_PATTERNS.PIPE_DECL.flags);
-  
-  for (let m; (m = pipeDeclRe.exec(text)); ) {
-    const name = m[2];
-    const nameStart = m.index + m[0].lastIndexOf(name);
-    pipelinePositions.set(name, { start: nameStart, length: name.length });
-  }
-
-  return { variablePositions, pipelinePositions };
+  const documentModel = createDocumentModel(text);
+  return {
+    variablePositions: documentModel.variablePositions,
+    pipelinePositions: documentModel.pipelinePositions
+  };
 }
 
 export function collectReferencePositions(text: string): ReferencePositions {
