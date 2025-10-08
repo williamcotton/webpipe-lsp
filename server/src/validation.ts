@@ -2,17 +2,17 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Diagnostic, DiagnosticSeverity, Connection } from 'vscode-languageserver/node';
 import { VALID_HTTP_METHODS, KNOWN_MIDDLEWARE, KNOWN_STEPS, REGEX_PATTERNS } from './constants';
 import { collectHandlebarsSymbols } from './symbol-collector';
-import { parseProgramWithDiagnostics } from 'webpipe-js';
+import { DocumentCache } from './document-cache';
 
 interface DiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
 }
 
 export class DocumentValidator {
-  constructor(private connection: Connection) {}
+  constructor(private connection: Connection, private cache: DocumentCache) {}
 
   async validateDocument(doc: TextDocument): Promise<void> {
-    const text = doc.getText();
+    const text = this.cache.getText(doc);
     const diagnostics: Diagnostic[] = [];
 
     this.validateTrailingNewline(text, doc, diagnostics);
@@ -46,8 +46,8 @@ export class DocumentValidator {
         });
       };
 
-      // Parse AST and include parser diagnostics
-      const { program, diagnostics: parseDiagnostics } = parseProgramWithDiagnostics(text);
+      // Get cached parse result
+      const { program, diagnostics: parseDiagnostics } = this.cache.get(doc);
       for (const d of parseDiagnostics) {
         push(
           d.severity === 'error' ? DiagnosticSeverity.Error : d.severity === 'warning' ? DiagnosticSeverity.Warning : DiagnosticSeverity.Information,

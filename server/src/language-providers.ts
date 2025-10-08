@@ -1,24 +1,24 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { 
-  Location, Position, Hover, MarkupKind, ReferenceParams, 
+import {
+  Location, Position, Hover, MarkupKind, ReferenceParams,
   HoverParams, DefinitionParams
 } from 'vscode-languageserver/node';
-import { 
-  collectReferencePositions, 
-  collectHandlebarsSymbols 
+import {
+  collectReferencePositions,
+  collectHandlebarsSymbols
 } from './symbol-collector';
 import { getVariableRanges, getPipelineRanges } from 'webpipe-js';
 import { getWordAt, createMarkdownCodeBlock } from './utils';
 import { RangeAbs } from './types';
 import { getMiddlewareDoc, formatMiddlewareHover } from './middleware-docs';
 import { getConfigDoc, formatConfigHover } from './config-docs';
+import { DocumentCache } from './document-cache';
 
 export class LanguageProviders {
-  onReferences(params: ReferenceParams, documents: Map<string, TextDocument>): Location[] | null {
-    const doc = documents.get(params.textDocument.uri);
-    if (!doc) return null;
-    
-    const text = doc.getText();
+  constructor(private cache: DocumentCache) {}
+
+  onReferences(params: ReferenceParams, doc: TextDocument): Location[] | null {
+    const text = this.cache.getText(doc);
     const variableRanges = getVariableRanges(text);
     const pipelineRanges = getPipelineRanges(text);
     const variablePositions = new Map<string, { start: number; length: number }>();
@@ -66,11 +66,8 @@ export class LanguageProviders {
     return this.resolveReferences(lineText, word, addDeclAndRefsForPipeline, addDeclAndRefsForVariable, hb, offset, doc, includeDecl, results);
   }
 
-  onHover(params: HoverParams, documents: Map<string, TextDocument>): Hover | null {
-    const doc = documents.get(params.textDocument.uri);
-    if (!doc) return null;
-    
-    const text = doc.getText();
+  onHover(params: HoverParams, doc: TextDocument): Hover | null {
+    const text = this.cache.getText(doc);
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);
     const wordInfo = getWordAt(text, offset);
@@ -107,11 +104,8 @@ export class LanguageProviders {
     return null;
   }
 
-  onDefinition(params: DefinitionParams, documents: Map<string, TextDocument>): Location | null {
-    const doc = documents.get(params.textDocument.uri);
-    if (!doc) return null;
-    
-    const text = doc.getText();
+  onDefinition(params: DefinitionParams, doc: TextDocument): Location | null {
+    const text = this.cache.getText(doc);
     const variableRanges = getVariableRanges(text);
     const pipelineRanges = getPipelineRanges(text);
     const variablePositions = new Map<string, { start: number; length: number }>();

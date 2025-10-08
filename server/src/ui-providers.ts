@@ -1,21 +1,21 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { 
+import {
   CodeLens, Location, DocumentHighlight, DocumentHighlightKind,
-  CodeLensParams, DocumentHighlightParams 
+  CodeLensParams, DocumentHighlightParams
 } from 'vscode-languageserver/node';
-import { 
-  collectReferencePositions, 
-  collectHandlebarsSymbols 
+import {
+  collectReferencePositions,
+  collectHandlebarsSymbols
 } from './symbol-collector';
 import { getWordAt } from './utils';
 import { getVariableRanges, getPipelineRanges } from 'webpipe-js';
+import { DocumentCache } from './document-cache';
 
 export class UIProviders {
-  onCodeLens(params: CodeLensParams, documents: Map<string, TextDocument>): CodeLens[] {
-    const doc = documents.get(params.textDocument.uri);
-    if (!doc) return [];
-    
-    const text = doc.getText();
+  constructor(private cache: DocumentCache) {}
+
+  onCodeLens(params: CodeLensParams, doc: TextDocument): CodeLens[] {
+    const text = this.cache.getText(doc);
     const variableRanges = getVariableRanges(text);
     const pipelineRanges = getPipelineRanges(text);
     const variablePositions = new Map<string, { start: number; length: number }>();
@@ -79,11 +79,8 @@ export class UIProviders {
     return lenses;
   }
 
-  onDocumentHighlight(params: DocumentHighlightParams, documents: Map<string, TextDocument>): DocumentHighlight[] | null {
-    const doc = documents.get(params.textDocument.uri);
-    if (!doc) return null;
-    
-    const text = doc.getText();
+  onDocumentHighlight(params: DocumentHighlightParams, doc: TextDocument): DocumentHighlight[] | null {
+    const text = this.cache.getText(doc);
     const variableRanges = getVariableRanges(text);
     const pipelineRanges = getPipelineRanges(text);
     const variablePositions = new Map<string, { start: number; length: number }>();

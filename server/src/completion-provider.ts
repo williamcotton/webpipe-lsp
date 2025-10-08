@@ -1,22 +1,22 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { CompletionItem, CompletionItemKind, Position, CompletionParams } from 'vscode-languageserver/node';
-import { parseProgram } from 'webpipe-js';
 import { KNOWN_MIDDLEWARE, KNOWN_STEPS, VALID_HTTP_METHODS, REGEX_PATTERNS } from './constants';
 import { collectHandlebarsSymbols } from './symbol-collector';
+import { DocumentCache } from './document-cache';
 
 export class CompletionProvider {
-  onCompletion(params: CompletionParams, documents: Map<string, TextDocument>): CompletionItem[] {
-    const doc = documents.get(params.textDocument.uri);
-    if (!doc) return [];
-    
-    const text = doc.getText();
-    const program = parseProgram(text);
+  constructor(private cache: DocumentCache) {}
+
+  onCompletion(params: CompletionParams, doc: TextDocument): CompletionItem[] {
+    const text = this.cache.getText(doc);
+    const program = this.cache.getProgram(doc);
+
     const variablesByType = new Map<string, Set<string>>();
     for (const v of program.variables) {
       if (!variablesByType.has(v.varType)) variablesByType.set(v.varType, new Set());
       variablesByType.get(v.varType)!.add(v.name);
     }
-    const pipelineNames = new Set<string>(program.pipelines.map(p => p.name));
+    const pipelineNames = new Set<string>(program.pipelines.map((p: any) => p.name));
 
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);

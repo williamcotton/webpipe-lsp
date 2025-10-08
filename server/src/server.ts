@@ -11,24 +11,19 @@ import { DocumentValidator } from './validation';
 import { CompletionProvider } from './completion-provider';
 import { LanguageProviders } from './language-providers';
 import { UIProviders } from './ui-providers';
+import { DocumentCache } from './document-cache';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 
-// Initialize providers
-const documentValidator = new DocumentValidator(connection);
-const completionProvider = new CompletionProvider();
-const languageProviders = new LanguageProviders();
-const uiProviders = new UIProviders();
+// Initialize document cache
+const documentCache = new DocumentCache();
 
-// Convert TextDocuments to Map for provider compatibility
-function getDocumentMap(): Map<string, TextDocument> {
-  const docMap = new Map<string, TextDocument>();
-  for (const doc of documents.all()) {
-    docMap.set(doc.uri, doc);
-  }
-  return docMap;
-}
+// Initialize providers with cache
+const documentValidator = new DocumentValidator(connection, documentCache);
+const completionProvider = new CompletionProvider(documentCache);
+const languageProviders = new LanguageProviders(documentCache);
+const uiProviders = new UIProviders(documentCache);
 
 connection.onInitialize((_params: InitializeParams): InitializeResult => {
   return {
@@ -62,27 +57,38 @@ connection.onInitialized(() => {
 
 // Language server provider handlers
 connection.onCompletion((params) => {
-  return completionProvider.onCompletion(params, getDocumentMap());
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? completionProvider.onCompletion(params, doc) : [];
 });
 
 connection.onReferences((params) => {
-  return languageProviders.onReferences(params, getDocumentMap());
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? languageProviders.onReferences(params, doc) : null;
 });
 
 connection.onHover((params) => {
-  return languageProviders.onHover(params, getDocumentMap());
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? languageProviders.onHover(params, doc) : null;
 });
 
 connection.onDefinition((params) => {
-  return languageProviders.onDefinition(params, getDocumentMap());
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? languageProviders.onDefinition(params, doc) : null;
 });
 
 connection.onCodeLens((params) => {
-  return uiProviders.onCodeLens(params, getDocumentMap());
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? uiProviders.onCodeLens(params, doc) : [];
 });
 
 connection.onDocumentHighlight((params) => {
-  return uiProviders.onDocumentHighlight(params, getDocumentMap());
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? uiProviders.onDocumentHighlight(params, doc) : null;
+});
+
+// Clean up cache when document is closed
+documents.onDidClose((event) => {
+  documentCache.invalidate(event.document.uri);
 });
 
 // Start the server
