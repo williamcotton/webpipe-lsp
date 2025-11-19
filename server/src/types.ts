@@ -39,3 +39,24 @@ export interface WordInfo {
   start: number;
   end: number;
 }
+
+/**
+ * Centralized symbol table derived from AST
+ * Contains all symbol information needed by language providers
+ */
+export interface SymbolTable {
+  // Variable and pipeline declarations (from AST)
+  variables: Map<string, Set<string>>; // varType -> Set of varNames
+  pipelines: Set<string>; // pipeline names
+
+  // Reference positions (from regex analysis, to be migrated to AST)
+  variableRefs: Map<string, Array<PositionInfo>>; // "varType::varName" -> references
+  pipelineRefs: Map<string, Array<PositionInfo>>; // pipelineName -> references
+
+  // Declaration positions (from webpipe-js utilities)
+  variablePositions: Map<string, PositionInfo>; // "varType::varName" -> declaration position
+  pipelinePositions: Map<string, PositionInfo>; // pipelineName -> declaration position
+
+  // Handlebars symbols
+  handlebars: HandlebarsSymbols;
+}

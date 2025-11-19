@@ -3,34 +3,22 @@ import {
   Location, Position, Hover, MarkupKind, ReferenceParams,
   HoverParams, DefinitionParams
 } from 'vscode-languageserver/node';
-import {
-  collectReferencePositions,
-  collectHandlebarsSymbols
-} from './symbol-collector';
-import { getVariableRanges, getPipelineRanges } from 'webpipe-js';
 import { getWordAt, createMarkdownCodeBlock } from './utils';
-import { RangeAbs } from './types';
+import { RangeAbs, SymbolTable, HandlebarsSymbols } from './types';
 import { getMiddlewareDoc, formatMiddlewareHover } from './middleware-docs';
 import { getConfigDoc, formatConfigHover } from './config-docs';
 import { DocumentCache } from './document-cache';
 
+/**
+ * Language providers for hover, definition, and references.
+ * Uses centralized symbol table from DocumentCache to avoid repeated parsing.
+ */
 export class LanguageProviders {
   constructor(private cache: DocumentCache) {}
 
   onReferences(params: ReferenceParams, doc: TextDocument): Location[] | null {
     const text = this.cache.getText(doc);
-    const variableRanges = getVariableRanges(text);
-    const pipelineRanges = getPipelineRanges(text);
-    const variablePositions = new Map<string, { start: number; length: number }>();
-    for (const [key, r] of variableRanges.entries()) {
-      variablePositions.set(key, { start: r.start, length: r.end - r.start });
-    }
-    const pipelinePositions = new Map<string, { start: number; length: number }>();
-    for (const [name, r] of pipelineRanges.entries()) {
-      pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
-    }
-    const { variableRefs, pipelineRefs } = collectReferencePositions(text);
-    const hb = collectHandlebarsSymbols(text);
+    const symbols = this.cache.getSymbols(doc);
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);
     const wordInfo = getWordAt(text, offset);
@@ -46,33 +34,34 @@ export class LanguageProviders {
 
     const addDeclAndRefsForPipeline = (name: string) => {
       if (includeDecl) {
-        const decl = pipelinePositions.get(name);
+        const decl = symbols.pipelinePositions.get(name);
         if (decl) results.push(Location.create(doc.uri, { start: doc.positionAt(decl.start), end: doc.positionAt(decl.start + decl.length) }));
       }
-      const refs = pipelineRefs.get(name) || [];
+      const refs = symbols.pipelineRefs.get(name) || [];
       for (const r of refs) results.push(Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
     };
 
     const addDeclAndRefsForVariable = (key: string) => {
       if (includeDecl) {
-        const decl = variablePositions.get(key);
+        const decl = symbols.variablePositions.get(key);
         if (decl) results.push(Location.create(doc.uri, { start: doc.positionAt(decl.start), end: doc.positionAt(decl.start + decl.length) }));
       }
-      const refs = variableRefs.get(key) || [];
+      const refs = symbols.variableRefs.get(key) || [];
       for (const r of refs) results.push(Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
     };
 
     // Context-based reference resolution
-    return this.resolveReferences(lineText, word, addDeclAndRefsForPipeline, addDeclAndRefsForVariable, hb, offset, doc, includeDecl, results);
+    return this.resolveReferences(lineText, word, addDeclAndRefsForPipeline, addDeclAndRefsForVariable, symbols.handlebars, offset, doc, includeDecl, results);
   }
 
   onHover(params: HoverParams, doc: TextDocument): Hover | null {
     const text = this.cache.getText(doc);
+    const symbols = this.cache.getSymbols(doc);
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);
     const wordInfo = getWordAt(text, offset);
     if (!wordInfo) return null;
-    
+
     const { word } = wordInfo;
     const lineStart = text.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
     const nextNl = text.indexOf('\n', offset);
@@ -89,16 +78,16 @@ export class LanguageProviders {
 
     // Pipeline hover
     if (this.isPipelineContext(lineText)) {
-      const md = this.formatPipelineHover(text, word);
+      const md = this.formatPipelineHover(text, word, symbols);
       if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
 
     // Variable hover
-    const variableHover = this.getVariableHover(lineText, text, word);
+    const variableHover = this.getVariableHover(lineText, text, word, symbols);
     if (variableHover) return variableHover;
 
     // Handlebars partial hover
-    const handlebarsHover = this.getHandlebarsHover(text, offset, word, doc);
+    const handlebarsHover = this.getHandlebarsHover(text, offset, word, doc, symbols);
     if (handlebarsHover) return handlebarsHover;
 
     return null;
@@ -106,17 +95,7 @@ export class LanguageProviders {
 
   onDefinition(params: DefinitionParams, doc: TextDocument): Location | null {
     const text = this.cache.getText(doc);
-    const variableRanges = getVariableRanges(text);
-    const pipelineRanges = getPipelineRanges(text);
-    const variablePositions = new Map<string, { start: number; length: number }>();
-    for (const [key, r] of variableRanges.entries()) {
-      variablePositions.set(key, { start: r.start, length: r.end - r.start });
-    }
-    const pipelinePositions = new Map<string, { start: number; length: number }>();
-    for (const [name, r] of pipelineRanges.entries()) {
-      pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
-    }
-    const hb = collectHandlebarsSymbols(text);
+    const symbols = this.cache.getSymbols(doc);
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);
     const wordInfo = getWordAt(text, offset);
@@ -130,7 +109,7 @@ export class LanguageProviders {
 
     // Pipeline definition
     if (/^\s*\|>\s*pipeline\s*:/.test(lineText) || /^\s*when\s+executing\s+pipeline\s+/.test(lineText) || /^\s*(with|and)\s+mock\s+pipeline\s+/.test(lineText)) {
-      const hit = pipelinePositions.get(word);
+      const hit = symbols.pipelinePositions.get(word);
       if (hit) {
         const range = { start: doc.positionAt(hit.start), end: doc.positionAt(hit.start + hit.length) };
         return Location.create(doc.uri, range);
@@ -138,11 +117,11 @@ export class LanguageProviders {
     }
 
     // Variable definition
-    const variableDefinition = this.getVariableDefinition(lineText, word, variablePositions, doc);
+    const variableDefinition = this.getVariableDefinition(lineText, word, symbols.variablePositions, doc);
     if (variableDefinition) return variableDefinition;
 
     // Handlebars definition
-    const handlebarsDefinition = this.getHandlebarsDefinition(hb, offset, doc);
+    const handlebarsDefinition = this.getHandlebarsDefinition(symbols.handlebars, offset, doc);
     if (handlebarsDefinition) return handlebarsDefinition;
 
     return null;
@@ -218,32 +197,32 @@ export class LanguageProviders {
     return null;
   }
 
-  private getVariableHover(lineText: string, text: string, word: string): Hover | null {
+  private getVariableHover(lineText: string, text: string, word: string, symbols: SymbolTable): Hover | null {
     let m: RegExpExecArray | null;
-    
+
     if ((m = /^\s*([A-Za-z_][\w-]*)\s+([A-Za-z_][\w-]*)\s*=\s*`/.exec(lineText))) {
       const varType = m[1];
-      const md = this.formatVariableHover(text, varType, word);
+      const md = this.formatVariableHover(text, varType, word, symbols);
       if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
-    
+
     if ((m = /^\s*\|>\s*([A-Za-z_][\w-]*)\s*:/.exec(lineText))) {
       const varType = m[1];
       if (varType !== 'pipeline') {
-        const md = this.formatVariableHover(text, varType, word);
+        const md = this.formatVariableHover(text, varType, word, symbols);
         if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
       }
     }
-    
+
     if ((m = /^\s*when\s+executing\s+variable\s+([A-Za-z_][\w-]*)\s+/.exec(lineText))) {
       const varType = m[1];
-      const md = this.formatVariableHover(text, varType, word);
+      const md = this.formatVariableHover(text, varType, word, symbols);
       if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
-    
+
     if ((m = /^\s*(with|and)\s+mock\s+([A-Za-z_][\w-]*)\./.exec(lineText))) {
       const varType = m[2];
-      const md = this.formatVariableHover(text, varType, word);
+      const md = this.formatVariableHover(text, varType, word, symbols);
       if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
 
@@ -293,8 +272,8 @@ export class LanguageProviders {
     return null;
   }
 
-  private getHandlebarsHover(text: string, offset: number, word: string, doc: TextDocument): Hover | null {
-    const hb = collectHandlebarsSymbols(text);
+  private getHandlebarsHover(text: string, offset: number, word: string, doc: TextDocument, symbols: SymbolTable): Hover | null {
+    const hb = symbols.handlebars;
     const withinContent = hb.contentRanges.some((r: RangeAbs) => offset >= r.start && offset <= r.end);
     
     if (!withinContent) return null;
@@ -320,9 +299,8 @@ export class LanguageProviders {
           if (!defRange) {
             const decl = hb.declByName.get(name);
             if (decl) {
-              const varRanges = getVariableRanges(text);
-              const full = varRanges.get(`handlebars::${name}`);
-              if (full) defRange = { start: full.start, end: full.end };
+              const fullPos = symbols.variablePositions.get(`handlebars::${name}`);
+              if (fullPos) defRange = { start: fullPos.start, end: fullPos.start + fullPos.length };
               else defRange = { start: decl.nameStart, end: decl.nameEnd };
               hoverLang = 'webpipe';
             }
@@ -386,20 +364,34 @@ export class LanguageProviders {
     return null;
   }
 
-  private formatVariableHover(text: string, varType: string, varName: string): string | null {
-    const ranges = getVariableRanges(text);
-    const r = ranges.get(`${varType}::${varName}`);
-    if (!r) return null;
-    let snippet = text.slice(r.start, r.end).trimEnd();
+  private formatVariableHover(text: string, varType: string, varName: string, symbols: SymbolTable): string | null {
+    const pos = symbols.variablePositions.get(`${varType}::${varName}`);
+    if (!pos) return null;
+
+    // Find the end of the variable declaration (until next var/pipeline/route/etc)
+    const start = pos.start;
+    const nextDeclRe = /\n(?:(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=)|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:GET|POST|PUT|PATCH|DELETE\s)|(?:describe\s))/g;
+    nextDeclRe.lastIndex = start;
+    const nextMatch = nextDeclRe.exec(text);
+    const end = nextMatch ? nextMatch.index : text.length;
+
+    let snippet = text.slice(start, end).trimEnd();
     if (snippet.length > 2400) snippet = snippet.slice(0, 2400) + '\n…';
     return createMarkdownCodeBlock('webpipe', snippet);
   }
 
-  private formatPipelineHover(text: string, pipelineName: string): string | null {
-    const ranges = getPipelineRanges(text);
-    const r = ranges.get(pipelineName);
-    if (!r) return null;
-    let snippet = text.slice(r.start, r.end).trimEnd();
+  private formatPipelineHover(text: string, pipelineName: string, symbols: SymbolTable): string | null {
+    const pos = symbols.pipelinePositions.get(pipelineName);
+    if (!pos) return null;
+
+    // Find the end of the pipeline declaration
+    const start = pos.start;
+    const nextDeclRe = /\n(?:(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=)|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:GET|POST|PUT|PATCH|DELETE\s)|(?:describe\s))/g;
+    nextDeclRe.lastIndex = start;
+    const nextMatch = nextDeclRe.exec(text);
+    const end = nextMatch ? nextMatch.index : text.length;
+
+    let snippet = text.slice(start, end).trimEnd();
     if (snippet.length > 2400) snippet = snippet.slice(0, 2400) + '\n…';
     return createMarkdownCodeBlock('webpipe', snippet);
   }

@@ -1,11 +1,14 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { parseProgramWithDiagnostics } from 'webpipe-js';
+import { parseProgramWithDiagnostics, Program, ParseDiagnostic } from 'webpipe-js';
+import { SymbolTable } from './types';
+import { buildSymbolTable } from './symbol-analyzer';
 
 interface CachedDocument {
   version: number;
   text: string;
-  program: any;
-  diagnostics: any[];
+  program: Program;
+  diagnostics: ParseDiagnostic[];
+  symbols: SymbolTable;
   timestamp: number;
 }
 
@@ -21,7 +24,7 @@ export class DocumentCache {
   /**
    * Get cached parse result or parse and cache if not available/stale
    */
-  get(doc: TextDocument): { program: any; diagnostics: any[] } {
+  get(doc: TextDocument): { program: Program; diagnostics: ParseDiagnostic[] } {
     const uri = doc.uri;
     const version = doc.version;
     const cached = this.cache.get(uri);
@@ -33,9 +36,10 @@ export class DocumentCache {
       return { program: cached.program, diagnostics: cached.diagnostics };
     }
 
-    // Cache miss or stale - parse document
+    // Cache miss or stale - parse document and build symbol table
     const text = doc.getText();
     const { program, diagnostics } = parseProgramWithDiagnostics(text);
+    const symbols = buildSymbolTable(program, text);
 
     // Store in cache
     this.cache.set(uri, {
@@ -43,6 +47,7 @@ export class DocumentCache {
       text,
       program,
       diagnostics,
+      symbols,
       timestamp: Date.now()
     });
 
@@ -55,8 +60,31 @@ export class DocumentCache {
   /**
    * Get just the program (for providers that don't need diagnostics)
    */
-  getProgram(doc: TextDocument): any {
+  getProgram(doc: TextDocument): Program {
     return this.get(doc).program;
+  }
+
+  /**
+   * Get the pre-computed symbol table for a document.
+   * This is the primary API for language providers (hover, definition, references).
+   * The symbol table is computed once per document version and cached.
+   */
+  getSymbols(doc: TextDocument): SymbolTable {
+    const uri = doc.uri;
+    const version = doc.version;
+    const cached = this.cache.get(uri);
+
+    // Ensure we have cached data for this version
+    if (!cached || cached.version !== version) {
+      // Trigger parse and symbol table build
+      this.get(doc);
+      const updated = this.cache.get(uri);
+      return updated!.symbols;
+    }
+
+    // Update timestamp for LRU
+    cached.timestamp = Date.now();
+    return cached.symbols;
   }
 
   /**
