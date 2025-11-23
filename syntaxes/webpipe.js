@@ -52,6 +52,12 @@ export default function(hljs) {
         match: '\\|>'
       },
 
+      // Tags: @tag, @!negated, @flag(args)
+      {
+        scope: 'meta',
+        match: '@!?[a-zA-Z_][a-zA-Z0-9_-]*(\\((\\s*[a-zA-Z0-9_-]+\\s*)(,\\s*[a-zA-Z0-9_-]+\\s*)*\\))?'
+      },
+
       // Middleware functions in pipelines (word before colon)
       {
         scope: 'keyword',

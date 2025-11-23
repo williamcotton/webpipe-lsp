@@ -270,6 +270,9 @@
         },
         {
           "include": "#pipeline-operator"
+        },
+        {
+          "include": "#tags"
         }
       ]
     },
@@ -789,6 +792,14 @@
         {
           "match": ".+",
           "name": "string.unquoted.embedded.webpipe"
+        }
+      ]
+    },
+    "tags": {
+      "patterns": [
+        {
+          "name": "storage.modifier.tag.webpipe",
+          "match": "@!?[a-zA-Z_][a-zA-Z0-9_-]*(\\((\\s*[a-zA-Z0-9_-]+\\s*)(,\\s*[a-zA-Z0-9_-]+\\s*)*\\))?"
         }
       ]
     },
