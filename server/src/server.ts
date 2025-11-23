@@ -35,6 +35,8 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
       hoverProvider: true,
       referencesProvider: true,
       definitionProvider: true,
+      renameProvider: true,
+      codeActionProvider: true,
     }
   };
 });
@@ -84,6 +86,26 @@ connection.onCodeLens((params) => {
 connection.onDocumentHighlight((params) => {
   const doc = documents.get(params.textDocument.uri);
   return doc ? uiProviders.onDocumentHighlight(params, doc) : null;
+});
+
+connection.onRenameRequest((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? languageProviders.onRename(params, doc) : null;
+});
+
+connection.onCodeAction((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? uiProviders.onCodeAction(params, doc) : [];
+});
+
+connection.onRequest('webpipe/extractPipeline', (params: { uri: string; range: any; pipelineName: string }) => {
+  const doc = documents.get(params.uri);
+  if (!doc) return;
+
+  const edit = uiProviders.createExtractPipelineEdit(params.range, params.pipelineName, doc);
+  if (edit) {
+    connection.workspace.applyEdit(edit);
+  }
 });
 
 // Clean up cache when document is closed

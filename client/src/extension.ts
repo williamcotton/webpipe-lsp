@@ -53,6 +53,36 @@ export function activate(context: vscode.ExtensionContext) {
     }
   });
   context.subscriptions.push(showRefs);
+
+  // Command to extract pipeline with custom name
+  const extractPipeline = vscode.commands.registerCommand('webpipe.extractPipeline', async (uri: string, rangeLike: any) => {
+    try {
+      const pipelineName = await vscode.window.showInputBox({
+        prompt: 'Enter a name for the new pipeline',
+        value: 'newPipeline',
+        validateInput: (value) => {
+          if (!value || !/^[A-Za-z_][\w-]*$/.test(value)) {
+            return 'Pipeline name must start with a letter or underscore and contain only letters, numbers, underscores, and hyphens';
+          }
+          return null;
+        }
+      });
+
+      if (!pipelineName) {
+        return; // User cancelled
+      }
+
+      // Send the pipeline name back to the server to perform the extraction
+      await client?.sendRequest('webpipe/extractPipeline', {
+        uri,
+        range: rangeLike,
+        pipelineName
+      });
+    } catch (e) {
+      console.error('webpipe.extractPipeline error', e);
+    }
+  });
+  context.subscriptions.push(extractPipeline);
 }
 
 export function deactivate(): Thenable<void> | undefined {

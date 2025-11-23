@@ -1,7 +1,7 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import {
   Location, Position, Hover, MarkupKind, ReferenceParams,
-  HoverParams, DefinitionParams
+  HoverParams, DefinitionParams, RenameParams, WorkspaceEdit, TextEdit
 } from 'vscode-languageserver/node';
 import { getWordAt, createMarkdownCodeBlock } from './utils';
 import { RangeAbs, SymbolTable, HandlebarsSymbols } from './types';
@@ -123,6 +123,102 @@ export class LanguageProviders {
     // Handlebars definition
     const handlebarsDefinition = this.getHandlebarsDefinition(symbols.handlebars, offset, doc);
     if (handlebarsDefinition) return handlebarsDefinition;
+
+    return null;
+  }
+
+  onRename(params: RenameParams, doc: TextDocument): WorkspaceEdit | null {
+    const text = this.cache.getText(doc);
+    const symbols = this.cache.getSymbols(doc);
+    const pos = params.position as Position;
+    const offset = doc.offsetAt(pos);
+    const wordInfo = getWordAt(text, offset);
+    if (!wordInfo) return null;
+
+    const { word } = wordInfo;
+    const newName = params.newName;
+    const lineStart = text.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+    const nextNl = text.indexOf('\n', offset);
+    const lineEnd = nextNl === -1 ? text.length : nextNl;
+    const lineText = text.slice(lineStart, lineEnd);
+
+    const edits: TextEdit[] = [];
+
+    // Pipeline rename
+    if (this.isPipelineContext(lineText)) {
+      const decl = symbols.pipelinePositions.get(word);
+      if (decl) {
+        edits.push(TextEdit.replace(
+          { start: doc.positionAt(decl.start), end: doc.positionAt(decl.start + decl.length) },
+          newName
+        ));
+      }
+      const refs = symbols.pipelineRefs.get(word) || [];
+      for (const r of refs) {
+        edits.push(TextEdit.replace(
+          { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) },
+          newName
+        ));
+      }
+
+      if (edits.length > 0) {
+        return { changes: { [doc.uri]: edits } };
+      }
+    }
+
+    // Variable rename
+    const variableKey = this.getVariableKey(lineText, word);
+    if (variableKey) {
+      const decl = symbols.variablePositions.get(variableKey);
+      if (decl) {
+        edits.push(TextEdit.replace(
+          { start: doc.positionAt(decl.start), end: doc.positionAt(decl.start + decl.length) },
+          newName
+        ));
+      }
+      const refs = symbols.variableRefs.get(variableKey) || [];
+      for (const r of refs) {
+        edits.push(TextEdit.replace(
+          { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) },
+          newName
+        ));
+      }
+
+      if (edits.length > 0) {
+        return { changes: { [doc.uri]: edits } };
+      }
+    }
+
+    // Handlebars partial rename
+    const withinContent = symbols.handlebars.contentRanges.some((r: RangeAbs) => offset >= r.start && offset <= r.end);
+    if (withinContent) {
+      for (const [name, uses] of symbols.handlebars.usagesByName.entries()) {
+        for (const u of uses) {
+          if (offset >= u.start && offset <= u.end) {
+            // Rename declaration
+            const decl = symbols.handlebars.declByName.get(name);
+            if (decl) {
+              edits.push(TextEdit.replace(
+                { start: doc.positionAt(decl.nameStart), end: doc.positionAt(decl.nameEnd) },
+                newName
+              ));
+            }
+
+            // Rename all usages
+            for (const r of uses) {
+              edits.push(TextEdit.replace(
+                { start: doc.positionAt(r.start), end: doc.positionAt(r.end) },
+                newName
+              ));
+            }
+
+            if (edits.length > 0) {
+              return { changes: { [doc.uri]: edits } };
+            }
+          }
+        }
+      }
+    }
 
     return null;
   }

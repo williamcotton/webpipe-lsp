@@ -1,7 +1,8 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import {
   CodeLens, Location, DocumentHighlight, DocumentHighlightKind,
-  CodeLensParams, DocumentHighlightParams
+  CodeLensParams, DocumentHighlightParams, CodeActionParams, CodeAction,
+  CodeActionKind, TextEdit
 } from 'vscode-languageserver/node';
 import {
   collectReferencePositions,
@@ -171,5 +172,77 @@ export class UIProviders {
     }
 
     return null;
+  }
+
+  onCodeAction(params: CodeActionParams, doc: TextDocument): CodeAction[] {
+    const text = this.cache.getText(doc);
+    const range = params.range;
+    const start = doc.offsetAt(range.start);
+    const end = doc.offsetAt(range.end);
+
+    // Check if selection is empty
+    if (start === end) return [];
+
+    const selectedText = text.slice(start, end);
+
+    // Check if the selection contains pipeline steps (|> ...)
+    // Match |> followed by any identifier and optional colon
+    const stepPattern = /\|>\s+[A-Za-z_][\w-]*\s*:/;
+    if (!stepPattern.test(selectedText)) return [];
+
+    // Count pipeline steps in selection - at least one step required
+    const stepMatches = selectedText.match(/\|>\s+[A-Za-z_][\w-]*\s*:/g);
+    if (!stepMatches || stepMatches.length === 0) return [];
+
+    // Create the code action with a command that will prompt for the name
+    const codeAction: CodeAction = {
+      title: 'Extract Pipeline',
+      kind: CodeActionKind.RefactorExtract,
+      command: {
+        title: 'Extract Pipeline',
+        command: 'webpipe.extractPipeline',
+        arguments: [doc.uri, range]
+      }
+    };
+
+    return [codeAction];
+  }
+
+  createExtractPipelineEdit(rangeLike: any, pipelineName: string, doc: TextDocument) {
+    const text = this.cache.getText(doc);
+    const range = {
+      start: { line: rangeLike.start.line, character: rangeLike.start.character },
+      end: { line: rangeLike.end.line, character: rangeLike.end.character }
+    };
+    const start = doc.offsetAt(range.start);
+    const end = doc.offsetAt(range.end);
+    const selectedText = text.slice(start, end);
+
+    // Find a good insertion point for the pipeline declaration
+    // (before the current route/pipeline/variable declaration)
+    const beforeSelection = text.slice(0, start);
+    const routeOrDeclPattern = /(^|\n)((?:GET|POST|PUT|PATCH|DELETE)\s|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=))/g;
+    let lastMatch = null;
+    let match;
+    while ((match = routeOrDeclPattern.exec(beforeSelection)) !== null) {
+      lastMatch = match;
+    }
+
+    const insertionOffset = lastMatch ? lastMatch.index : 0;
+    const insertionPos = doc.positionAt(insertionOffset);
+
+    // Create the pipeline declaration
+    const indent = selectedText.match(/^(\s*)/)?.[1] || '  ';
+    const pipelineDecl = `pipeline ${pipelineName} =\n${selectedText}\n\n`;
+
+    // Create the edits
+    const edits: TextEdit[] = [
+      // Insert the pipeline declaration
+      TextEdit.insert(insertionPos, pipelineDecl),
+      // Replace the selected steps with |> pipeline: pipelineName
+      TextEdit.replace(range, `${indent}|> pipeline: ${pipelineName}`)
+    ];
+
+    return { changes: { [doc.uri]: edits } };
   }
 }
