@@ -487,6 +487,42 @@
           ]
         },
         {
+          "begin": "^\\s*(\\|>)\\s*(join):\\s*`",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.operator.pipe.webpipe"
+            },
+            "2": {
+              "name": "entity.name.function.middleware.join.webpipe"
+            }
+          },
+          "end": "`",
+          "name": "meta.embedded.join.webpipe",
+          "patterns": [
+            {
+              "include": "#join-config"
+            }
+          ]
+        },
+        {
+          "begin": "^\\s*(\\|>)\\s*(join):\\s*\"",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.operator.pipe.webpipe"
+            },
+            "2": {
+              "name": "entity.name.function.middleware.join.webpipe"
+            }
+          },
+          "end": "\"",
+          "name": "meta.embedded.join.webpipe",
+          "patterns": [
+            {
+              "include": "#join-config"
+            }
+          ]
+        },
+        {
           "match": "^\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_]*):\\s*`",
           "captures": {
             "1": {
@@ -880,6 +916,40 @@
         {
           "name": "storage.modifier.tag.webpipe",
           "match": "@!?[a-zA-Z_][a-zA-Z0-9_-]*(\\((\\s*[a-zA-Z0-9_-]+\\s*)(,\\s*[a-zA-Z0-9_-]+\\s*)*\\))?"
+        }
+      ]
+    },
+    "join-config": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.comma.webpipe",
+          "match": ","
+        },
+        {
+          "name": "punctuation.bracket.square.webpipe",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "variable.other.async-task.webpipe",
+          "match": "\"([a-zA-Z_][a-zA-Z0-9_-]*)\"",
+          "captures": {
+            "1": {
+              "name": "variable.other.async-task.webpipe"
+            }
+          }
+        },
+        {
+          "name": "variable.other.async-task.webpipe",
+          "match": "'([a-zA-Z_][a-zA-Z0-9_-]*)'",
+          "captures": {
+            "1": {
+              "name": "variable.other.async-task.webpipe"
+            }
+          }
+        },
+        {
+          "name": "variable.other.async-task.webpipe",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_-]*\\b"
         }
       ]
     },

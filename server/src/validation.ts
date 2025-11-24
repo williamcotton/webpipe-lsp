@@ -74,6 +74,7 @@ export class DocumentValidator {
       this.validateAssertions(text, push);
       this.validateUnknownSteps(text, push);
       this.validateHandlebarsPartialReferences(text, push);
+      this.validateJoinAsyncReferences(text, push);
       
     } catch (_e) {
       // Best-effort validation; avoid crashing on regex issues
@@ -493,5 +494,94 @@ export class DocumentValidator {
         }
       }
     }
+  }
+
+  /**
+   * Validates that names referenced in join middleware exist as @async(name) tags
+   * in the same pipeline context.
+   */
+  private validateJoinAsyncReferences(text: string, push: DiagnosticPush): void {
+    // Find pipeline context boundaries (routes, named pipelines, query/mutation resolvers)
+    // Each context can have its own @async tags and join steps
+    const boundaryRe = /(^|\n)\s*(GET|POST|PUT|PATCH|DELETE|pipeline\s+[A-Za-z_][\w-]*\s*=|query\s+[A-Za-z_][\w-]*\s*=|mutation\s+[A-Za-z_][\w-]*\s*=|describe\s+|config\s+)/gm;
+
+    const contexts: Array<{ start: number; end: number; type: string }> = [];
+    let match;
+
+    while ((match = boundaryRe.exec(text)) !== null) {
+      const type = match[2].split(/\s/)[0];
+      const start = match.index + (match[1] === '\n' ? 1 : 0);
+
+      // Close previous context
+      if (contexts.length > 0) {
+        contexts[contexts.length - 1].end = start;
+      }
+
+      contexts.push({ start, end: text.length, type });
+    }
+
+    // Process each pipeline context
+    for (const ctx of contexts) {
+      // Skip non-pipeline contexts (describe blocks for tests, config blocks)
+      if (ctx.type === 'describe' || ctx.type === 'config') continue;
+
+      const slice = text.slice(ctx.start, ctx.end);
+
+      // Collect @async(name) tag names from this context
+      const asyncNames = new Set<string>();
+      const asyncTagRe = /@async\(\s*([A-Za-z_][\w-]*)\s*\)/g;
+      while ((match = asyncTagRe.exec(slice)) !== null) {
+        asyncNames.add(match[1]);
+      }
+
+      // Find join steps and validate their references
+      // Match: |> join: `config` or |> join: "config"
+      const joinStepRe = /\|>\s*join\s*:\s*(?:`([^`]*)`|"([^"]*)")/g;
+      while ((match = joinStepRe.exec(slice)) !== null) {
+        const joinConfig = match[1] ?? match[2];
+        if (!joinConfig) continue;
+
+        // Find where the config content starts in the match
+        const configStart = match[0].indexOf(joinConfig);
+        const joinNames = this.parseJoinConfigNames(joinConfig);
+
+        for (const { name, offset } of joinNames) {
+          if (!asyncNames.has(name)) {
+            const absStart = ctx.start + match.index + configStart + offset;
+            push(
+              DiagnosticSeverity.Error,
+              absStart,
+              absStart + name.length,
+              `Unknown async task '${name}'. No @async(${name}) tag found in this pipeline.`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Parses a join config string and extracts the task names with their positions.
+   * Handles: comma-separated names, JSON arrays, quoted and unquoted names.
+   * Examples: "user,posts,todos", '["github","bitcoin"]', "req1, req2, req3"
+   */
+  private parseJoinConfigNames(config: string): Array<{ name: string; offset: number }> {
+    const results: Array<{ name: string; offset: number }> = [];
+
+    // Match: "name", 'name', or bare identifier
+    // This handles all formats: plain comma-separated, JSON arrays, quoted strings
+    const nameRe = /"([A-Za-z_][\w-]*)"|'([A-Za-z_][\w-]*)'|\b([A-Za-z_][\w-]*)\b/g;
+
+    let match;
+    while ((match = nameRe.exec(config)) !== null) {
+      const name = match[1] ?? match[2] ?? match[3];
+      if (!name) continue;
+
+      // Calculate offset: +1 if quoted to skip the opening quote
+      const offset = match.index + (match[1] !== undefined || match[2] !== undefined ? 1 : 0);
+      results.push({ name, offset });
+    }
+
+    return results;
   }
 }

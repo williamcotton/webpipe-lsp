@@ -21,11 +21,16 @@ export function activate(context: vscode.ExtensionContext) {
     }
   };
 
+  // Create an output channel for the language server
+  const outputChannel = vscode.window.createOutputChannel('Web Pipe Language Server');
+  outputChannel.appendLine('Web Pipe Language Server starting...');
+
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: 'file', language: 'webpipe' }],
     synchronize: {
       fileEvents: vscode.workspace.createFileSystemWatcher('**/*.wp')
-    }
+    },
+    outputChannel: outputChannel
   };
 
   client = new LanguageClient(
