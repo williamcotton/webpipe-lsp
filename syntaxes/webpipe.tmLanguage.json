@@ -99,6 +99,67 @@
     "variable-assignment": {
       "patterns": [
         {
+          "begin": "^\\s*(graphql)\\s+(schema)\\s*=\\s*`",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.graphql.webpipe"
+            },
+            "2": {
+              "name": "keyword.control.graphql.webpipe"
+            }
+          },
+          "end": "`",
+          "name": "meta.graphql-schema.webpipe",
+          "contentName": "source.graphql",
+          "patterns": [
+            {
+              "include": "source.graphql"
+            }
+          ]
+        },
+        {
+          "begin": "^\\s*(query)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*=",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.graphql.query.webpipe"
+            },
+            "2": {
+              "name": "entity.name.function.query.webpipe"
+            }
+          },
+          "end": "^(?!\\s*\\|>)(?=\\S|$)",
+          "name": "meta.query-resolver.webpipe",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#pipeline-steps"
+            }
+          ]
+        },
+        {
+          "begin": "^\\s*(mutation)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*=",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.graphql.mutation.webpipe"
+            },
+            "2": {
+              "name": "entity.name.function.mutation.webpipe"
+            }
+          },
+          "end": "^(?!\\s*\\|>)(?=\\S|$)",
+          "name": "meta.mutation-resolver.webpipe",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#pipeline-steps"
+            }
+          ]
+        },
+        {
           "begin": "^\\s*(pipeline)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*=",
           "beginCaptures": {
             "1": {
@@ -403,6 +464,25 @@
           "patterns": [
             {
               "include": "#validate-embedded"
+            }
+          ]
+        },
+        {
+          "begin": "^\\s*(\\|>)\\s*(graphql):\\s*`",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.operator.pipe.webpipe"
+            },
+            "2": {
+              "name": "entity.name.function.middleware.graphql.webpipe"
+            }
+          },
+          "end": "`",
+          "name": "meta.embedded.graphql.webpipe",
+          "contentName": "source.graphql",
+          "patterns": [
+            {
+              "include": "source.graphql"
             }
           ]
         },
