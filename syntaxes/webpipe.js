@@ -18,10 +18,10 @@ export default function(hljs) {
         match: '\\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\\b'
       },
 
-      // Config / pipeline keywords
+      // Config / pipeline / featureFlags keywords
       {
         scope: 'keyword',
-        match: '\\b(config|pipeline)\\b'
+        match: '\\b(config|pipeline|featureFlags)\\b'
       },
 
       // ────────────────────────────────────────────────

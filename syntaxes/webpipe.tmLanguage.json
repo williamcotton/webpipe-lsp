@@ -160,6 +160,24 @@
           ]
         },
         {
+          "begin": "^\\s*(featureFlags)\\s*=",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.feature-flags.webpipe"
+            }
+          },
+          "end": "^(?!\\s*\\|>)(?=\\S|$)",
+          "name": "meta.feature-flags.webpipe",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#pipeline-steps"
+            }
+          ]
+        },
+        {
           "begin": "^\\s*(pipeline)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*=",
           "beginCaptures": {
             "1": {
