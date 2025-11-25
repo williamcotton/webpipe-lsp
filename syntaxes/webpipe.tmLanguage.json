@@ -99,13 +99,10 @@
     "variable-assignment": {
       "patterns": [
         {
-          "begin": "^\\s*(graphql)\\s+(schema)\\s*=\\s*`",
+          "begin": "^\\s*(graphqlSchema)\\s*=\\s*`",
           "beginCaptures": {
             "1": {
               "name": "storage.type.graphql.webpipe"
-            },
-            "2": {
-              "name": "keyword.control.graphql.webpipe"
             }
           },
           "end": "`",
@@ -255,6 +252,25 @@
             },
             {
               "include": "source.sql"
+            }
+          ]
+        },
+        {
+          "begin": "^\\s*(graphql)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*=\\s*`",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.middleware.webpipe"
+            },
+            "2": {
+              "name": "variable.other.assignment.webpipe"
+            }
+          },
+          "end": "`",
+          "name": "meta.variable-assignment.graphql.webpipe",
+          "contentName": "source.graphql",
+          "patterns": [
+            {
+              "include": "source.graphql"
             }
           ]
         },
