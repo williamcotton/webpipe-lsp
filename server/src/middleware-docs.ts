@@ -198,6 +198,35 @@ export const middlewareDocs: Record<string, MiddlewareDoc> = {
     examples: [
       'GET /users/:id\n  |> jq: `{ sqlParams: [.params.id] }`\n  |> pg: `SELECT * FROM users WHERE id = $1`\n  |> result\n    ok(200):\n      |> jq: `.data.rows[0]`\n    default(404):\n      |> jq: `{ error: "User not found" }`'
     ]
+  },
+
+  rateLimit: {
+    name: 'rateLimit',
+    description: 'Rate limiting middleware using sliding window counters.',
+    inputs: [
+      '`keyTemplate` (required): Template for the rate limit key with interpolation, e.g. `ip-{ip}-route-{method}-{path}`, `user-{user.id}`',
+      '`limit` (required): Maximum requests allowed per window',
+      '`window` (required): Time window duration, e.g. `60s`, `1m`, `5m`, `1h`',
+      '`burst` (optional): Extra burst capacity above the limit',
+      '`scope` (optional): Semantic hint (`route`, `global`, `custom`)',
+      '`enabled` (optional): If `false`, rate limiting is skipped (default: `true`)'
+    ],
+    behavior: [
+      'Tracks request counts per key using sliding window',
+      'Adds `_metadata.rateLimit` with `remaining`, `limit`, `resetAfter`, `key`',
+      'Supports nested path interpolation: `{user.id}`, `{params.name}`',
+      '`{ip}` is available from connection or `X-Forwarded-For`/`X-Real-IP` headers'
+    ],
+    errors: [
+      '`{ type: "rate_limit_exceeded", message, status: 429 }`'
+    ],
+    notes: [
+      'Client IP extracted from: 1) `X-Forwarded-For` header (first IP), 2) `X-Real-IP` header, 3) TCP connection'
+    ],
+    examples: [
+      'GET /api/search\n  |> rateLimit: `\n    keyTemplate: ip-{ip}-route-{method}-{path}\n    limit: 20\n    window: 10s\n  `',
+      'GET /api/users\n  |> rateLimit: `\n    keyTemplate: user-{user.id}-route-{method}-{path}\n    limit: 100\n    window: 60s\n    burst: 10\n  `'
+    ]
   }
 };
 

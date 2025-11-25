@@ -1,11 +1,11 @@
 export const VALID_HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
 export const KNOWN_MIDDLEWARE = new Set([
-  'jq', 'pg', 'fetch', 'handlebars', 'lua', 'auth', 'cache', 'log', 'debug', 'validate', 'graphql'
+  'jq', 'pg', 'fetch', 'handlebars', 'lua', 'auth', 'cache', 'log', 'debug', 'validate', 'graphql', 'rateLimit'
 ]);
 
 export const KNOWN_STEPS = new Set([
-  'jq', 'pg', 'fetch', 'handlebars', 'lua', 'auth', 'cache', 'log', 'debug', 'validate', 'result', 'pipeline', 'join', 'graphql'
+  'jq', 'pg', 'fetch', 'handlebars', 'lua', 'auth', 'cache', 'log', 'debug', 'validate', 'result', 'pipeline', 'join', 'graphql', 'rateLimit'
 ]);
 
 export const VALID_AUTH_FLOWS = new Set(['optional', 'required', 'login', 'register', 'logout']);
