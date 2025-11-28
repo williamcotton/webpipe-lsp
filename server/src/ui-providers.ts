@@ -221,7 +221,7 @@ export class UIProviders {
     // Find a good insertion point for the pipeline declaration
     // (before the current route/pipeline/variable declaration)
     const beforeSelection = text.slice(0, start);
-    const routeOrDeclPattern = /(^|\n)((?:GET|POST|PUT|PATCH|DELETE)\s|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=))/g;
+    const routeOrDeclPattern = /(^|\n)((?:GET|POST|PUT|DELETE)\s|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=))/g;
     let lastMatch = null;
     let match;
     while ((match = routeOrDeclPattern.exec(beforeSelection)) !== null) {

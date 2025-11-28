@@ -15,7 +15,7 @@ export default function(hljs) {
       // HTTP Methods
       {
         scope: 'keyword',
-        match: '\\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\\b'
+        match: '\\b(GET|POST|PUT|DELETE|HEAD|OPTIONS)\\b'
       },
 
       // Config / pipeline / featureFlags keywords

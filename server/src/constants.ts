@@ -1,4 +1,4 @@
-export const VALID_HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+export const VALID_HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
 
 export const KNOWN_MIDDLEWARE = new Set([
   'jq', 'pg', 'fetch', 'handlebars', 'lua', 'auth', 'cache', 'log', 'debug', 'validate', 'graphql', 'rateLimit'

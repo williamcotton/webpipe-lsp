@@ -466,7 +466,7 @@ export class LanguageProviders {
 
     // Find the end of the variable declaration (until next var/pipeline/route/etc)
     const start = pos.start;
-    const nextDeclRe = /\n(?:(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=)|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:GET|POST|PUT|PATCH|DELETE\s)|(?:describe\s))/g;
+    const nextDeclRe = /\n(?:(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=)|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:GET|POST|PUT|DELETE\s)|(?:describe\s))/g;
     nextDeclRe.lastIndex = start;
     const nextMatch = nextDeclRe.exec(text);
     const end = nextMatch ? nextMatch.index : text.length;
@@ -482,7 +482,7 @@ export class LanguageProviders {
 
     // Find the end of the pipeline declaration
     const start = pos.start;
-    const nextDeclRe = /\n(?:(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=)|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:GET|POST|PUT|PATCH|DELETE\s)|(?:describe\s))/g;
+    const nextDeclRe = /\n(?:(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=)|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:GET|POST|PUT|DELETE\s)|(?:describe\s))/g;
     nextDeclRe.lastIndex = start;
     const nextMatch = nextDeclRe.exec(text);
     const end = nextMatch ? nextMatch.index : text.length;

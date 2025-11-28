@@ -386,7 +386,7 @@ export class DocumentValidator {
   }
 
   private validateResultBlocks(text: string, push: DiagnosticPush): void {
-    const resultBlockRe = /(^|\n)\s*\|>\s*result([\s\S]*?)(?=(\n\s*\|>|\n\s*(GET|POST|PUT|PATCH|DELETE)|$))/g;
+    const resultBlockRe = /(^|\n)\s*\|>\s*result([\s\S]*?)(?=(\n\s*\|>|\n\s*(GET|POST|PUT|DELETE)|$))/g;
     for (let m; (m = resultBlockRe.exec(text)); ) {
       const block = m[2] || '';
       const seenTypes = new Set<string>();
@@ -503,7 +503,7 @@ export class DocumentValidator {
   private validateJoinAsyncReferences(text: string, push: DiagnosticPush): void {
     // Find pipeline context boundaries (routes, named pipelines, query/mutation resolvers)
     // Each context can have its own @async tags and join steps
-    const boundaryRe = /(^|\n)\s*(GET|POST|PUT|PATCH|DELETE|pipeline\s+[A-Za-z_][\w-]*\s*=|query\s+[A-Za-z_][\w-]*\s*=|mutation\s+[A-Za-z_][\w-]*\s*=|describe\s+|config\s+)/gm;
+    const boundaryRe = /(^|\n)\s*(GET|POST|PUT|DELETE|pipeline\s+[A-Za-z_][\w-]*\s*=|query\s+[A-Za-z_][\w-]*\s*=|mutation\s+[A-Za-z_][\w-]*\s*=|describe\s+|config\s+)/gm;
 
     const contexts: Array<{ start: number; end: number; type: string }> = [];
     let match;

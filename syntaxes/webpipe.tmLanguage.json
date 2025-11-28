@@ -73,7 +73,7 @@
     "route-definition": {
       "patterns": [
         {
-          "begin": "^\\s*(GET|POST|PUT|PATCH|DELETE)\\s+([^\\s]+)",
+          "begin": "^\\s*(GET|POST|PUT|DELETE)\\s+([^\\s]+)",
           "beginCaptures": {
             "1": {
               "name": "keyword.control.http-method.webpipe"
