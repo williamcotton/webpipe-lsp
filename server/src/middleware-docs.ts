@@ -200,6 +200,48 @@ export const middlewareDocs: Record<string, MiddlewareDoc> = {
     ]
   },
 
+  join: {
+    name: 'join',
+    description: 'Wait for async tasks to complete and merge their results.',
+    inputs: [
+      'Comma-separated list of async task names to wait for',
+      'Can be plain identifiers: `task1,task2,task3`',
+      'Or JSON array: `["task1","task2","task3"]`'
+    ],
+    behavior: [
+      'Blocks until all specified async tasks complete',
+      'Results are merged into `.async.<taskName>` in the context',
+      'Each async result contains the full middleware output',
+      'Tasks are identified by the `@async(name)` tag on their step'
+    ],
+    examples: [
+      'GET /dashboard\n  |> fetch: `https://api.example.com/users` @async(users)\n  |> fetch: `https://api.example.com/posts` @async(posts)\n  |> join: `users,posts`\n  |> jq: `{\n    users: .async.users.data.response,\n    posts: .async.posts.data.response\n  }`'
+    ]
+  },
+
+  graphql: {
+    name: 'graphql',
+    description: 'Execute GraphQL queries and mutations using defined resolvers.',
+    inputs: [
+      'GraphQL query/mutation string (inline or variable reference)',
+      '`graphqlParams`: object of variables to pass to the query'
+    ],
+    behavior: [
+      'Parses and executes GraphQL operations against defined `query` and `mutation` resolvers',
+      'Results are placed in `.data` with the GraphQL response structure',
+      'Can reference GraphQL variables: `|> graphql: myQueryVar`',
+      'Works with `@async(name)` for parallel execution'
+    ],
+    errors: [
+      '`{ type: "graphqlError", message, path?, locations? }`'
+    ],
+    examples: [
+      'POST /graphql\n  |> jq: `{ graphqlParams: .variables }`\n  |> graphql: `.query`',
+      'GET /test-graphql\n  |> graphql: `query { users { id name } }`',
+      'graphql myQuery = `query { currentTime }`\n\nGET /time\n  |> graphql: myQuery'
+    ]
+  },
+
   rateLimit: {
     name: 'rateLimit',
     description: 'Rate limiting middleware using sliding window counters.',

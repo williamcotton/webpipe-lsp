@@ -24,6 +24,12 @@ export default function(hljs) {
         match: '\\b(config|pipeline|featureFlags)\\b'
       },
 
+      // Control flow keywords (if/else)
+      {
+        scope: 'keyword',
+        match: '\\b(if|then|else|end)\\b'
+      },
+
       // ────────────────────────────────────────────────
       //  NEW: middleware keyword in *variable assignment*
       //       e.g.  pg pageQuery = `…` or mustache template = """…"""
