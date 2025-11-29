@@ -374,6 +374,9 @@
           "include": "#dispatch-step"
         },
         {
+          "include": "#foreach-step"
+        },
+        {
           "include": "#pipeline-operator"
         },
         {
@@ -780,6 +783,44 @@
               "include": "#pipeline-steps"
             }
           ]
+        },
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#pipeline-steps"
+        }
+      ]
+    },
+    "foreach-step": {
+      "begin": "^\\s*(\\|>)\\s*(foreach)\\s+([a-zA-Z_][a-zA-Z0-9_.]*)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.pipe.webpipe"
+        },
+        "2": {
+          "name": "keyword.control.foreach.webpipe"
+        },
+        "3": {
+          "name": "variable.other.selector.webpipe"
+        }
+      },
+      "end": "^(?=\\s*end\\b|^(?!\\s*\\|>)\\S|$)",
+      "patterns": [
+        {
+          "include": "#foreach-branches"
+        }
+      ]
+    },
+    "foreach-branches": {
+      "patterns": [
+        {
+          "match": "^\\s*(end)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.end.webpipe"
+            }
+          }
         },
         {
           "include": "#comments"

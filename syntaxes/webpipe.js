@@ -24,10 +24,10 @@ export default function(hljs) {
         match: '\\b(config|pipeline|featureFlags)\\b'
       },
 
-      // Control flow keywords (if/else/dispatch)
+      // Control flow keywords (if/else/dispatch/foreach)
       {
         scope: 'keyword',
-        match: '\\b(if|then|else|dispatch|case|default|end)\\b'
+        match: '\\b(if|then|else|dispatch|case|default|foreach|end)\\b'
       },
 
       // ────────────────────────────────────────────────
