@@ -191,6 +191,136 @@ GET /lua-cpu
     }
   `
 
+GET /lua-pipeline-benchmark
+  |> lua: `
+    -- Stage 1: Initialize with user data and array
+    return {
+      user = {
+        id = 12345,
+        name = "Test User",
+        email = "test@example.com",
+        roles = {"admin", "developer", "moderator"}
+      },
+      data = {},
+      items = {},
+      stage = 1,
+      timestamp = os.time()
+    }
+  `
+  |> lua: `
+    -- Stage 2: Generate array of 100 items with metadata
+    local items = {}
+    for i = 1, 100 do
+      items[i] = {
+        id = i,
+        value = i * 10,
+        squared = i * i,
+        label = "Item_" .. tostring(i)
+      }
+    end
+
+    return {
+      user = request.user,
+      data = request.data,
+      items = items,
+      itemCount = 100,
+      stage = 2,
+      timestamp = request.timestamp
+    }
+  `
+  |> lua: `
+    -- Stage 3: Process items and calculate statistics
+    local total = 0
+    local squared_total = 0
+    local processed = {}
+
+    for i, item in ipairs(request.items) do
+      total = total + item.value
+      squared_total = squared_total + item.squared
+      if item.value % 20 == 0 then
+        processed[#processed + 1] = {
+          id = item.id,
+          value = item.value,
+          category = "special"
+        }
+      end
+    end
+
+    return {
+      user = request.user,
+      items = request.items,
+      itemCount = request.itemCount,
+      data = {
+        sum = total,
+        squaredSum = squared_total,
+        average = total / request.itemCount,
+        specialItems = processed
+      },
+      stage = 3,
+      timestamp = request.timestamp
+    }
+  `
+  |> lua: `
+    -- Stage 4: Add computed fields and enrich user data
+    local userScore = 0
+    for i, role in ipairs(request.user.roles) do
+      userScore = userScore + string.len(role) * 10
+    end
+
+    local enrichedUser = {
+      id = request.user.id,
+      name = request.user.name,
+      email = request.user.email,
+      roles = request.user.roles,
+      roleCount = #request.user.roles,
+      computed = {
+        score = userScore,
+        level = math.floor(userScore / 50),
+        badge = userScore > 150 and "gold" or "silver"
+      }
+    }
+
+    return {
+      user = enrichedUser,
+      items = request.items,
+      itemCount = request.itemCount,
+      data = request.data,
+      stage = 4,
+      timestamp = request.timestamp
+    }
+  `
+  |> lua: `
+    -- Stage 5: Final aggregation and response formatting
+    local processingTime = os.time() - request.timestamp
+
+    return {
+      summary = {
+        user = request.user.name,
+        userId = request.user.id,
+        userLevel = request.user.computed.level,
+        userBadge = request.user.computed.badge,
+        totalItems = request.itemCount,
+        specialItemsFound = #request.data.specialItems,
+        dataProcessed = {
+          sum = request.data.sum,
+          average = request.data.average,
+          squaredSum = request.data.squaredSum
+        }
+      },
+      performance = {
+        stages = 5,
+        processingTimeSeconds = processingTime,
+        itemsProcessed = request.itemCount,
+        note = "5 Lua stages with data passing - tests zero-copy architecture"
+      },
+      benchmark = {
+        route = "/lua-pipeline-benchmark",
+        purpose = "A/B test Phase 1 performance improvements",
+        expectation = "Reduced memory allocations and faster execution"
+      }
+    }
+  `
+
 GET /test3
   |> jq: `{message: "Hello World", status: "success"}`
   |> result
@@ -576,6 +706,7 @@ GET /api/search
     search_category: .query.category
   }`
   |> pg: `SELECT pg_sleep(0.3), $1 as term, $2 as category, 'Search results' as result_type, now() as searched_at`
+  |> debug: `level: debug, includeBody: true, includeHeaders: true`
   |> jq: `{
     search_term: .data.rows[0].term,
     category: .data.rows[0].category,
@@ -1211,3 +1342,965 @@ GET /tagged-route
 # @flag(beta,staff) - Multiple feature flag args
 
 # Set environment with: WEBPIPE_ENV=production or WEBPIPE_ENV=development
+
+## Async/Join Feature Demo (v2.0+)
+
+GET /dashboard-sync
+  |> fetch: `https://jsonplaceholder.typicode.com/users/1`
+  |> jq: `{ user: .data.response }`
+  |> fetch: `https://jsonplaceholder.typicode.com/posts?userId=1&_limit=5`
+  |> jq: `. + { posts: .data.response }`
+  |> fetch: `https://jsonplaceholder.typicode.com/todos?userId=1&_limit=5`
+  |> jq: `. + { todos: .data.response }`
+  |> jq: `{
+    pageTitle: "User Dashboard (Sync)",
+    user: .user,
+    recentPosts: .posts,
+    pendingTodos: .todos | map(select(.completed == false))
+  }`
+  |> handlebars: `
+    <html>
+      <head><title>{{pageTitle}}</title></head>
+      <body>
+        <h1>{{pageTitle}}</h1>
+
+        <section>
+          <h2>User Info</h2>
+          <p><strong>Name:</strong> {{user.name}}</p>
+          <p><strong>Email:</strong> {{user.email}}</p>
+          <p><strong>Company:</strong> {{user.company.name}}</p>
+        </section>
+
+        <section>
+          <h2>Recent Posts</h2>
+          <ul>
+            {{#each recentPosts}}
+              <li><strong>{{title}}</strong><br>{{body}}</li>
+            {{/each}}
+          </ul>
+        </section>
+
+        <section>
+          <h2>Pending Todos</h2>
+          <ul>
+            {{#each pendingTodos}}
+              <li>{{title}}</li>
+            {{/each}}
+          </ul>
+        </section>
+      </body>
+    </html>
+  `
+
+GET /dashboard
+  |> fetch: `https://jsonplaceholder.typicode.com/users/1` @async(user)
+  |> fetch: `https://jsonplaceholder.typicode.com/posts?userId=1&_limit=5` @async(posts)
+  |> fetch: `https://jsonplaceholder.typicode.com/todos?userId=1&_limit=5` @async(todos)
+  |> jq: `{
+    pageTitle: "User Dashboard",
+    timestamp: now
+  }`
+  |> join: `user,posts,todos`
+  |> jq: `{
+    page: .pageTitle,
+    loadedAt: .timestamp,
+    user: .async.user.data.response,
+    recentPosts: .async.posts.data.response,
+    pendingTodos: .async.todos.data.response
+  }`
+  |> handlebars: `
+    <html>
+      <head><title>{{page}}</title></head>
+      <body>
+        <h1>{{page}}</h1>
+        <p>Loaded at: {{loadedAt}}</p>
+
+        <section>
+          <h2>User Info</h2>
+          <p><strong>Name:</strong> {{user.name}}</p>
+          <p><strong>Email:</strong> {{user.email}}</p>
+          <p><strong>Company:</strong> {{user.company.name}}</p>
+        </section>
+
+        <section>
+          <h2>Recent Posts</h2>
+          <ul>
+            {{#each recentPosts}}
+              <li><strong>{{title}}</strong><br>{{body}}</li>
+            {{/each}}
+          </ul>
+        </section>
+
+        <section>
+          <h2>Pending Todos</h2>
+          <ul>
+            {{#each pendingTodos}}
+              <li>{{title}}</li>
+            {{/each}}
+          </ul>
+        </section>
+      </body>
+    </html>
+  `
+
+GET /weather/:city
+  |> jq: `{
+    fetchUrl: "https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&current_weather=true",
+    fetchMethod: "GET"
+  }` 
+  |> fetch: `_` @async(openmeteo)
+  |> jq: `{
+    fetchUrl: "https://goweather.herokuapp.com/weather/" + .params.city,
+    fetchMethod: "GET"
+  }` 
+  |> fetch: `_` @async(goweather)
+  |> join: `openmeteo,goweather`
+  |> jq: `{
+    city: .params.city,
+    temperature: (.async.openmeteo.data.response.current_weather.temperature // .async.goweather.data.temperature),
+    description: (.async.goweather.data.response.description // "Data from Open-Meteo"),
+    sources: {
+      openmeteo: (.async.openmeteo.error // "success"),
+      goweather: (.async.goweather.error // "success")
+    }
+  }`
+  |> handlebars: `
+    <h1>Weather for {{city}}</h1>
+    <p><strong>Temperature:</strong> {{temperature}}°C</p>
+    <p><strong>Conditions:</strong> {{description}}</p>
+    <details>
+      <summary>API Sources</summary>
+      <ul>
+        <li>Open-Meteo: {{sources.openmeteo}}</li>
+        <li>GoWeather: {{sources.goweather}}</li>
+      </ul>
+    </details>
+  `
+
+GET /parallel-api-demo
+  |> fetch: `https://api.github.com/users/github` @async(github)
+  |> fetch: `https://api.coindesk.com/v1/bpi/currentprice.json` @async(bitcoin)
+  |> fetch: `https://official-joke-api.appspot.com/random_joke` @async(joke)
+  |> join: `["github","bitcoin","joke"]`
+  |> jq: `{
+    githubUser: .async.github.data.response.login,
+    bitcoinPrice: .async.bitcoin.data.response.bpi.USD.rate,
+    randomJoke: .async.joke.data.response.setup + " - " + .async.joke.data.response.punchline
+  }`
+
+GET /slow-sync
+  |> lua: `
+    -- Simulate ~2s delay and preserve prior fields
+    local start = os.time()
+    while os.time() - start < 2 do end
+    local out = {}
+    if type(request) == "table" then
+      for k, v in pairs(request) do out[k] = v end
+    end
+    out.data = { response = { url = "lua://delay/2/step1" } }
+    return out
+  `
+  |> jq: `{ first: .data.response, step: "1/3" }`
+  |> lua: `
+    -- Simulate ~2s delay and preserve prior fields
+    local start = os.time()
+    while os.time() - start < 2 do end
+    local out = {}
+    if type(request) == "table" then
+      for k, v in pairs(request) do out[k] = v end
+    end
+    out.data = { response = { url = "lua://delay/2/step2" } }
+    return out
+  `
+  |> jq: `. + { second: .data.response, step: "2/3" }`
+  |> lua: `
+    -- Simulate ~2s delay and preserve prior fields
+    local start = os.time()
+    while os.time() - start < 2 do end
+    local out = {}
+    if type(request) == "table" then
+      for k, v in pairs(request) do out[k] = v end
+    end
+    out.data = { response = { url = "lua://delay/2/step3" } }
+    return out
+  `
+  |> jq: `. + { third: .data.response, step: "3/3" }`
+  |> jq: `{
+    message: "All requests completed synchronously",
+    totalTime: "~6 seconds (2+2+2)",
+    results: [.first.url, .second.url, .third.url]
+  }`
+
+GET /slow-async
+  |> lua: `
+    -- Simulate ~2s delay and preserve prior fields
+    local start = os.time()
+    while os.time() - start < 2 do end
+    local out = {}
+    if type(request) == "table" then
+      for k, v in pairs(request) do out[k] = v end
+    end
+    out.data = { response = { url = "lua://delay/2/step1" } }
+    return out
+  ` @async(req1)
+  |> lua: `
+    -- Simulate ~2s delay and preserve prior fields
+    local start = os.time()
+    while os.time() - start < 2 do end
+    local out = {}
+    if type(request) == "table" then
+      for k, v in pairs(request) do out[k] = v end
+    end
+    out.data = { response = { url = "lua://delay/2/step2" } }
+    return out
+  ` @async(req2)
+  |> lua: `
+    -- Simulate ~2s delay and preserve prior fields
+    local start = os.time()
+    while os.time() - start < 2 do end
+    local out = {}
+    if type(request) == "table" then
+      for k, v in pairs(request) do out[k] = v end
+    end
+    out.data = { response = { url = "lua://delay/2/step3" } }
+    return out
+  ` @async(req3)
+  |> join: `req1,req2,req3`
+  |> jq: `{
+    message: "All requests completed in parallel",
+    totalTime: "~2 seconds (all parallel)",
+    results: [
+      .async.req1.data.response.url,
+      .async.req2.data.response.url,
+      .async.req3.data.response.url
+    ]
+  }`
+
+query todos =
+  |> auth: "required"
+  |> jq: `{ sqlParams: [.context.user.id] }`
+  |> pg: `
+    SELECT id, title, completed, created_at, updated_at
+    FROM todos
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+  `
+  |> jq: `.data.rows`
+
+
+mutation toggleTodo =
+  |> auth: "required"
+  |> jq: `{ sqlParams: [.args.id, .context.user.id] }`
+  |> pg: `
+    UPDATE todos
+    SET completed = NOT completed,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = $1 AND user_id = $2
+    RETURNING *
+  `
+  |> jq: `.data.rows[0]`
+
+## GraphQL Schema and Resolvers Demo
+
+graphqlSchema = `
+  type User {
+    id: ID!
+    name: String!
+    email: String!
+    createdAt: String!
+  }
+
+  type Post {
+    id: ID!
+    title: String!
+    body: String!
+    userId: Int!
+    published: Boolean!
+  }
+
+  type Stats {
+    totalUsers: Int!
+    totalPosts: Int!
+    activeUsers: Int!
+  }
+
+  type Query {
+    currentTime: String!
+    randomNumber: Int!
+    users: [User!]!
+    user(id: Int!): User
+    posts(limit: Int): [Post!]!
+    stats: Stats!
+  }
+
+  type Mutation {
+    createPost(title: String!, body: String!): Post!
+    updatePost(id: Int!, title: String, body: String): Post!
+    deletePost(id: Int!): Boolean!
+  }
+`
+
+# Query resolver: return current timestamp
+query currentTime =
+  |> pg: `SELECT NOW()::text as time`
+  |> jq: `.data.rows[0].time`
+
+# Query resolver: return a random number
+query randomNumber =
+  |> pg: `SELECT floor(random() * 1000)::int as number`
+  |> jq: `.data.rows[0].number`
+
+# Query resolver: return mock users
+query users =
+  |> pg: `
+    SELECT
+      id,
+      'User ' || id as name,
+      'user' || id || '@example.com' as email,
+      NOW() - (id || ' days')::interval as "createdAt"
+    FROM generate_series(1, 5) as id
+  `
+  |> jq: `.data.rows`
+
+# Query resolver: return single user by ID
+query user =
+  |> jq: `{ sqlParams: [.id] }`
+  |> pg: `
+    SELECT
+      $1 as id,
+      'User ' || $1 as name,
+      'user' || $1 || '@example.com' as email,
+      NOW()::text as "createdAt"
+  `
+  |> jq: `.data.rows[0]`
+
+# Query resolver: return mock posts with optional limit
+query posts =
+  |> jq: `{ sqlParams: [.limit // 10] }`
+  |> pg: `
+    SELECT
+      id,
+      'Post Title ' || id as title,
+      'This is the body content for post ' || id as body,
+      (id % 5) + 1 as "userId",
+      (random() > 0.5) as published
+    FROM generate_series(1, $1) as id
+  `
+  |> jq: `.data.rows`
+
+# Query resolver: return aggregate stats
+query stats =
+  |> pg: `
+    SELECT
+      5 as "totalUsers",
+      100 as "totalPosts",
+      3 as "activeUsers"
+  `
+  |> jq: `.data.rows[0]`
+
+# Mutation resolver: create a post
+mutation createPost =
+  |> validate: `{
+    title: string(5..100),
+    body: string(10..500)
+  }`
+  |> jq: `{ sqlParams: [.title, .body] }`
+  |> pg: `
+    SELECT
+      floor(random() * 1000)::int as id,
+      $1 as title,
+      $2 as body,
+      1 as "userId",
+      true as published
+  `
+  |> jq: `.data.rows[0]`
+
+# Mutation resolver: update a post
+mutation updatePost =
+  |> validate: `{
+    id: number
+  }`
+  |> jq: `{ sqlParams: [.id, .title // "Updated Title", .body // "Updated body"] }`
+  |> pg: `
+    SELECT
+      $1 as id,
+      $2 as title,
+      $3 as body,
+      1 as "userId",
+      true as published
+  `
+  |> jq: `.data.rows[0]`
+
+# Mutation resolver: delete a post
+mutation deletePost =
+  |> jq: `{ sqlParams: [.id] }`
+  |> pg: `SELECT $1 as id`
+  |> jq: `(.data.rows | length > 0)`
+
+# GraphQL endpoint: execute GraphQL queries
+POST /graphql
+  |> jq: `{ graphqlParams: .variables }`
+  |> graphql: `.query`
+
+# Test route: simple query
+GET /test-graphql-simple
+  |> graphql: `
+    query {
+      currentTime
+      randomNumber
+    }
+  `
+
+# Test route: query with arguments
+GET /test-graphql-args
+  |> jq: `.graphqlParams = { id: 1, limit: 3 }`
+  |> graphql: `
+    query($id: Int!, $limit: Int) {
+      user(id: $id) {
+        id
+        name
+        email
+      }
+      posts(limit: $limit) {
+        id
+        title
+      }
+    }
+  `
+
+graphql testMutation = `
+  mutation($title: String!, $body: String!) {
+    createPost(title: $title, body: $body) {
+      id
+      title
+      body
+    }
+  }
+`
+
+POST /test-graphql-mutation
+  |> jq: `.graphqlParams = { title: .body.title, body: .body.body }`
+  |> graphql: testMutation
+
+# Test route: multiple queries with resultName
+GET /test-graphql-multi
+  |> jq: `.resultName = "time"`
+  |> graphql: `query { currentTime }`
+  |> jq: `.resultName = "users"`
+  |> graphql: `query { users { id name email } }`
+  |> jq: `.resultName = "stats"`
+  |> graphql: `query { stats { totalUsers totalPosts activeUsers } }`
+
+# Test route: single query with users (for debugging)
+GET /test-graphql-users-only
+  |> graphql: `query { users { id name email } }`
+
+# Test route: single graphql call with resultName
+GET /test-graphql-single-resultname
+  |> jq: `.resultName = "users"`
+  |> graphql: `query { users { id name email } }`
+
+# Test route: test just first step of multi
+GET /test-graphql-first-step
+  |> jq: `.resultName = "time"`
+  |> graphql: `query { currentTime }`
+
+# Test route: parallel GraphQL queries with async and join
+# Fires multiple independent GraphQL queries in parallel for maximum performance
+GET /test-graphql-async-parallel
+  |> graphql: `query { users { id name email } }` @async(usersQuery)
+  |> graphql: `query { stats { totalUsers totalPosts activeUsers } }` @async(statsQuery)
+  |> graphql: `query { posts(limit: 5) { id title userId published } }` @async(postsQuery)
+  |> graphql: `query { currentTime randomNumber }` @async(timeQuery)
+  |> join: `usersQuery, statsQuery, postsQuery, timeQuery`
+  |> jq: `{
+    dashboard: {
+      loadedAt: .async.timeQuery.data.currentTime,
+      randomNumber: .async.timeQuery.data.randomNumber,
+      statistics: .async.statsQuery.data.stats,
+      users: .async.usersQuery.data.users,
+      recentPosts: .async.postsQuery.data.posts,
+      metadata: {
+        queriesExecuted: 4,
+        executionMode: "parallel"
+      }
+    }
+  }`
+
+# Comparison route: same queries executed synchronously (slower)
+GET /test-graphql-sync-sequential
+  |> jq: `.resultName = "users"`
+  |> graphql: `query { users { id name email } }`
+  |> jq: `.resultName = "stats"`
+  |> graphql: `query { stats { totalUsers totalPosts activeUsers } }`
+  |> jq: `.resultName = "posts"`
+  |> graphql: `query { posts(limit: 5) { id title userId published } }`
+  |> jq: `.resultName = "time"`
+  |> graphql: `query { currentTime randomNumber }`
+  |> jq: `{
+    dashboard: {
+      loadedAt: .data.time.currentTime,
+      randomNumber: .data.time.randomNumber,
+      statistics: .data.stats.stats,
+      users: .data.users.users,
+      recentPosts: .data.posts.posts,
+      metadata: {
+        queriesExecuted: 4,
+        executionMode: "sequential"
+      }
+    }
+  }`
+
+GET /ok
+  |> jq: `.`
+
+## Parallel pg_sleep Demo - Async Join Performance Test
+# This demonstrates how 3 independent 2-second database sleeps complete in ~2 seconds total
+# when executed in parallel via async/join, instead of ~6 seconds sequentially.
+
+# Query resolvers that each sleep for 2 seconds
+query slowQuery1 =
+  |> pg: `SELECT pg_sleep(2), 'Query 1 complete' as result, NOW()::text as completed_at`
+  |> jq: `.data.rows[0]`
+
+query slowQuery2 =
+  |> pg: `SELECT pg_sleep(2), 'Query 2 complete' as result, NOW()::text as completed_at`
+  |> jq: `.data.rows[0]`
+
+query slowQuery3 =
+  |> pg: `SELECT pg_sleep(2), 'Query 3 complete' as result, NOW()::text as completed_at`
+  |> jq: `.data.rows[0]`
+
+graphql slowQuery1 = `query { slowQuery1 { result completed_at } }`
+graphql slowQuery2 = `query { slowQuery2 { result completed_at } }`
+graphql slowQuery3 = `query { slowQuery3 { result completed_at } }`
+
+# Parallel execution route - should complete in ~2 seconds
+GET /test-parallel-sleep
+  |> graphql: slowQuery1 @async(q1)
+  |> graphql: slowQuery2 @async(q2)
+  |> graphql: slowQuery3 @async(q3)
+  |> jq: `{ startedAt: now }`
+  |> join: `q1, q2, q3`
+  |> jq: `{ totalTime: (now - .startedAt) }`
+  |> jq: `{
+    totalTime: .totalTime,
+    message: "All 3 queries with 2-second sleeps completed in parallel!",
+    results: {
+      query1: .async.q1.data.slowQuery1,
+      query2: .async.q2.data.slowQuery2,
+      query3: .async.q3.data.slowQuery3
+    }
+  }`
+
+# Sequential execution route for comparison - should take ~6 seconds
+GET /test-sequential-sleep
+  |> jq: `{ startedAt: now }`
+  |> jq: `.resultName = "q1"`
+  |> graphql: slowQuery1
+  |> jq: `.resultName = "q2"`
+  |> graphql: slowQuery2
+  |> jq: `.resultName = "q3"`
+  |> graphql: slowQuery3
+  |> jq: `{ totalTime: (now - .startedAt) }`
+  |> jq: `{
+    totalTime: .totalTime,
+    message: "All 3 queries completed sequentially",
+    results: {
+      query1: .data.q1.slowQuery1,
+      query2: .data.q2.slowQuery2,
+      query3: .data.q3.slowQuery3
+    }
+  }`
+
+## Feature Flags Demo (v2.0+)
+# Demonstrates dynamic feature flags with 2/3 probability rollout
+
+featureFlags =
+  |> lua: `
+    -- Enable "experimental-feature" flag 2/3rds of the time
+    
+    -- Generate random number between 0 and 1
+    math.randomseed(os.time() * 1000 + (request.headers and request.headers["x-request-id"] and tonumber(request.headers["x-request-id"]) or 0))
+    local rand = math.random()
+
+    -- Enable flag if random value is less than 0.666 (2/3)
+    -- Use new setFlag API
+    setFlag("experimental-feature", (rand < 0.6666))
+
+    -- Always enable beta flag for internal users
+    if request.user and request.user.email and string.find(request.user.email, "@internal.com") then
+      setFlag("beta-features", true)
+    else
+      setFlag("beta-features", false)
+    end
+
+    -- No need to return metadata anymore
+    return {}
+  `
+
+GET /feature-test
+  |> jq: `{ message: "Standard feature (no flag required)" }` @!flag(experimental-feature)
+  |> jq: `{ message: "Experimental feature enabled!" }` @flag(experimental-feature)
+
+GET /feature-gui
+  |> jq: `{
+    title: "Standard Dashboard",
+    message: "Welcome to your dashboard",
+    version: "1.0"
+  }` @!flag(experimental-feature)
+  |> handlebars: `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>{{title}}</title>
+      <style>
+        body { font-family: Arial, sans-serif; background: #f5f5f5; color: #333; padding: 40px; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        .info { background: #ecf0f1; padding: 15px; border-radius: 5px; margin-top: 20px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>{{title}}</h1>
+        <p>{{message}}</p>
+        <div class="info">
+          <strong>Version:</strong> {{version}}
+        </div>
+      </div>
+    </body>
+    </html>
+  ` @!flag(experimental-feature)
+  |> jq: `{
+    title: "Experimental Dashboard",
+    features: ["Real-time Analytics", "AI-Powered Insights", "Advanced Filtering"],
+    theme: "modern"
+  }` @flag(experimental-feature)
+  |> handlebars: `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>{{title}}</title>
+      <style>
+        body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 40px; }
+        .container { max-width: 800px; margin: 0 auto; background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); padding: 30px; border-radius: 15px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+        h1 { font-size: 2.5em; margin-bottom: 10px; }
+        .badge { background: #10b981; padding: 5px 15px; border-radius: 20px; font-size: 0.8em; display: inline-block; margin-bottom: 20px; }
+        .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 30px; }
+        .feature-card { background: rgba(255,255,255,0.2); padding: 20px; border-radius: 10px; text-align: center; transition: transform 0.2s; }
+        .feature-card:hover { transform: translateY(-5px); }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>{{title}}</h1>
+        <span class="badge">EXPERIMENTAL</span>
+        <p style="font-size: 1.2em; opacity: 0.9;">Experience the next generation of features</p>
+        <div class="features">
+          {{#each features}}
+          <div class="feature-card">
+            <strong>{{this}}</strong>
+          </div>
+          {{/each}}
+        </div>
+      </div>x
+    </body>
+    </html>
+  ` @flag(experimental-feature)
+
+GET /test-rate-limit
+  |> rateLimit: `
+    keyTemplate: ip-{ip}-route-{method}-{path}
+    limit: 1
+    window: 10s
+  `
+  |> jq: `{ message: "Rate limited" }`
+
+## If/Else Feature Demo (v2.1+)
+# Demonstrates the new implicit condition if/else syntax
+# The condition is itself a pipeline, making it very powerful
+
+# Test 1: Simple boolean condition
+GET /test-if-simple
+  |> jq: `{ count: 15 }`
+  |> if
+    |> jq: `.count > 10`
+    then:
+      |> jq: `{ status: "high", count: .count }`
+    else:
+      |> jq: `{ status: "low", count: .count }`
+
+# Simple test without result step
+GET /test-if-simple/:value
+  |> jq: `{ value: (.params.value | tonumber) }`
+  |> if
+    |> jq: `.value > 50`
+    then:
+      |> jq: `{ category: "high", then: true }`
+    else:
+      |> jq: `{ category: "low", else: true }`
+    end
+  |> jq: `{ final: true, wrapped: . }`
+
+# Test 2: Multi-step condition with external API check
+pipeline protectedResource =
+  |> jq: `{ message: "Access granted to protected resource" }`
+
+GET /test-if-auth
+  |> if
+    |> jq: `{ authorized: true }`
+    then:
+      |> log: "Access Granted"
+      |> pipeline: protectedResource
+    else:
+      |> jq: `{ error: "Unauthorized", status: 401 }`
+
+# Test 3: If without else (pass-through behavior)
+GET /test-if-no-else
+  |> jq: `{ initial: "data", count: 7 }`
+  |> if
+    |> jq: `.count > 5`
+    then:
+      |> jq: `. + { modified: true, bonus: "high count" }`
+
+# Test 4: Nested if blocks
+GET /test-if-nested
+  |> jq: `{ level: 12 }`
+  # comment here
+  |> if
+    |> jq: `.level > 0`
+    # comment here
+    then:
+      |> if
+        |> jq: `.level > 10`
+        then:
+          |> jq: `. + { status: "high", tier: "premium" }`
+        else:
+          |> jq: `. + { status: "medium", tier: "standard" }`
+    else:
+      |> jq: `. + { status: "low", tier: "free" }`
+
+# Test 5: Condition returns null (should be falsy)
+GET /test-if-null
+  |> if
+    |> jq: `null`
+    then:
+      |> jq: `{ result: "should not see this" }`
+    else:
+      |> jq: `{ result: "null is falsy" }`
+
+# Test 6: Condition returns false
+GET /test-if-false
+  |> if
+    |> jq: `false`
+    then:
+      |> jq: `{ result: "should not see this" }`
+    else:
+      |> jq: `{ result: "false is falsy" }`
+
+# Test 7: Condition returns object (should be truthy)
+GET /test-if-object
+  |> if
+    |> jq: `{ some: "data" }`
+    then:
+      |> jq: `{ result: "objects are truthy" }`
+    else:
+      |> jq: `{ result: "should not see this" }`
+
+# Test 8: Condition with database query
+GET /test-if-db-check/:userId
+  |> if
+    |> jq: `{ sqlParams: [.params.userId] }`
+    |> pg: `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND status = 'active') as active`
+    |> jq: `.data.rows[0].active`
+    then:
+      |> jq: `{ message: "User is active", userId: .params.userId }`
+    else:
+      |> jq: `{ error: "User not found or inactive", userId: .params.userId }`
+
+# Test 9: If/else with result branches
+GET /test-if-with-result/:value
+  |> jq: `{ value: (.params.value | tonumber) }`
+  |> if
+    |> jq: `.value > 50`
+    then:
+      |> jq: `{ category: "high", value: .value }`
+    else:
+      |> jq: `{ category: "low", value: .value }`
+    end
+  |> result
+    ok(200):
+      |> jq: `{ success: true, data: . }`
+
+# Test 10: Complex condition with multiple steps
+GET /test-if-complex
+  |> jq: `{ userId: 123 }`
+  |> if
+    |> jq: `{ sqlParams: [.userId] }`
+    |> pg: `SELECT COUNT(*) as count FROM users WHERE id = $1`
+    |> jq: `.data.rows[0].count > 0`
+    then:
+      |> jq: `{ authorized: true, message: "User found in database" }`
+    else:
+      |> jq: `{ authorized: false, message: "User not found" }`
+
+describe "if/else feature"
+  it "executes then branch when condition is true"
+    when calling GET /test-if-simple
+    then output `.status` equals "high"
+    and output `.count` equals 15
+
+  it "executes else branch when condition is false"
+    when calling GET /test-if-false
+    then output `.result` equals "false is falsy"
+
+  it "treats null as falsy"
+    when calling GET /test-if-null
+    then output `.result` equals "null is falsy"
+
+  it "treats objects as truthy"
+    when calling GET /test-if-object
+    then output `.result` equals "objects are truthy"
+
+# ========================================
+# Context Injection Tests
+# ========================================
+# Test JQ middleware with $context
+GET /test-context-jq
+  |> jq: `{
+    has_context: ($context != null),
+    has_flags: ($context.flags != null),
+    message: "JQ context works"
+  }`
+
+# Test Lua middleware with context variable
+GET /test-context-lua
+  |> lua: `
+    return {
+      has_context = (context ~= nil),
+      has_flags = (context.flags ~= nil),
+      message = "Lua context works"
+    }
+  `
+
+# Test Handlebars middleware with context
+GET /test-context-handlebars
+  |> jq: `{ name: "WebPipe" }`
+  |> handlebars: `<p>Hello {{name}}! Env: {{context.env}}</p>`
+
+# Test rate limit metadata in context
+GET /test-context-ratelimit
+  |> rateLimit: `keyTemplate: context-test, limit: 100, window: 1m`
+  |> jq: `{
+    allowed: $context.rate_limit.allowed,
+    has_limit: ($context.rate_limit.limit != null),
+    has_remaining: ($context.rate_limit.remaining != null)
+  }`
+
+# Test context with feature flags
+GET /test-context-flags
+  |> jq: `{
+    flag_count: ($context.flags | length)
+  }`
+
+describe "Context Injection"
+
+  it "injects context into JQ middleware"
+    when calling GET /test-context-jq
+    then status is 200
+    and output `.has_context` equals true
+    and output `.has_flags` equals true
+    and output `.message` equals "JQ context works"
+
+  it "injects context into Lua middleware"
+    when calling GET /test-context-lua
+    then status is 200
+    and output `.has_context` equals true
+    and output `.has_flags` equals true
+    and output `.message` equals "Lua context works"
+
+  it "injects context into Handlebars middleware"
+    when calling GET /test-context-handlebars
+    then status is 200
+    and output contains "Hello WebPipe!"
+
+  it "exposes rate limit metadata in context"
+    when calling GET /test-context-ratelimit
+    then status is 200
+    and output `.allowed` equals true
+    and output `.has_limit` equals true
+    and output `.has_remaining` equals true
+
+## Dispatch Feature Demo (v2.1+)
+# Demonstrates the new dispatch syntax as an alternative to @tag filtering on steps
+
+# Equivalent using dispatch syntax - cleaner for branching logic
+GET /feature-test-dispatch
+  |> dispatch
+    case @flag(experimental-feature):
+      |> jq: `{ message: "Experimental feature enabled!" }`
+    default:
+      |> jq: `{ message: "Standard feature (no flag required)" }`
+
+# More complex example: environment-based dispatch
+GET /env-dispatch
+  |> dispatch
+    case @env(production):
+      |> jq: `{ env: "production", debug: false, caching: true }`
+    case @env(staging):
+      |> jq: `{ env: "staging", debug: true, caching: true }`
+    case @env(development):
+      |> jq: `{ env: "development", debug: true, caching: false }`
+    default:
+      |> jq: `{ env: "unknown", debug: false, caching: false }`
+
+# Dispatch with negated tags
+GET /non-production-dispatch
+  |> dispatch
+    case @!env(production):
+      |> jq: `{
+        message: "Non-production environment",
+        debugTools: true,
+        mockData: true
+      }`
+    default:
+      |> jq: `{
+        message: "Production environment",
+        debugTools: false,
+        mockData: false
+      }`
+
+# Dispatch with multi-step pipelines
+GET /multi-step-dispatch
+  |> dispatch
+    case @flag(experimental):
+      |> jq: `{ step: 1, version: "experimental" }`
+      |> jq: `. + { step: 2, features: ["ai", "realtime"] }`
+      |> jq: `. + { step: 3, complete: true }`
+    case @flag(beta):
+      |> jq: `{ step: 1, version: "beta" }`
+      |> jq: `. + { step: 2, features: ["analytics"] }`
+    default:
+      |> jq: `{ step: 1, version: "stable", features: [] }`
+
+describe "Dispatch Feature"
+  it "routes based on feature flags"
+    when calling GET /feature-test-dispatch
+    then status is 200
+    and output `.message` contains "feature"
+
+  it "handles environment-based routing to default"
+    when calling GET /env-dispatch
+    then status is 200
+
+  it "handles negated tags in dispatch"
+    when calling GET /non-production-dispatch
+    then status is 200
+    and output `.message` contains "environment"
+
+  it "executes multi-step pipelines in dispatch branches"
+    when calling GET /multi-step-dispatch
+    then status is 200
+    and output `.step` equals 1
+    and output `.version` equals "stable"
