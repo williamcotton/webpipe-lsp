@@ -371,6 +371,9 @@
           "include": "#if-step"
         },
         {
+          "include": "#dispatch-step"
+        },
+        {
           "include": "#pipeline-operator"
         },
         {
@@ -694,6 +697,78 @@
           "beginCaptures": {
             "1": {
               "name": "keyword.control.else.webpipe"
+            }
+          },
+          "end": "^(?=\\s*end\\b|^(?!\\s*\\|>)\\S|$)",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#pipeline-steps"
+            }
+          ]
+        },
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#pipeline-steps"
+        }
+      ]
+    },
+    "dispatch-step": {
+      "begin": "^\\s*(\\|>)\\s*(dispatch)\\s*$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.pipe.webpipe"
+        },
+        "2": {
+          "name": "keyword.control.dispatch.webpipe"
+        }
+      },
+      "end": "^(?!\\s*case\\s+@|\\s*default:|\\s*\\|>)(?=\\S|$)",
+      "patterns": [
+        {
+          "include": "#dispatch-branches"
+        }
+      ]
+    },
+    "dispatch-branches": {
+      "patterns": [
+        {
+          "match": "^\\s*(end)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.end.webpipe"
+            }
+          }
+        },
+        {
+          "begin": "^\\s*(case)\\s+(@!?[a-zA-Z_][a-zA-Z0-9_-]*(\\([^)]*\\))?)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.case.webpipe"
+            },
+            "2": {
+              "name": "entity.name.tag.webpipe"
+            }
+          },
+          "end": "^(?=\\s*case\\s+@|\\s*default:|\\s*end\\b|^(?!\\s*\\|>)\\S|$)",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#pipeline-steps"
+            }
+          ]
+        },
+        {
+          "begin": "^\\s*(default):",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.default.webpipe"
             }
           },
           "end": "^(?=\\s*end\\b|^(?!\\s*\\|>)\\S|$)",
