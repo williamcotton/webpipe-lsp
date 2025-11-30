@@ -30,6 +30,12 @@ export default function(hljs) {
         match: '\\b(if|then|else|dispatch|case|default|foreach|end)\\b'
       },
 
+      // Boolean operators for tag expressions in dispatch
+      {
+        scope: 'keyword',
+        match: '\\b(and|or)\\b'
+      },
+
       // ────────────────────────────────────────────────
       //  NEW: middleware keyword in *variable assignment*
       //       e.g.  pg pageQuery = `…` or mustache template = """…"""
