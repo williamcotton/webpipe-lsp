@@ -1146,6 +1146,14 @@
     "tags": {
       "patterns": [
         {
+          "name": "keyword.operator.logical.webpipe",
+          "match": "\\b(and|or)\\b"
+        },
+        {
+          "name": "punctuation.parenthesis.tag-expression.webpipe",
+          "match": "[()]"
+        },
+        {
           "name": "storage.modifier.tag.webpipe",
           "match": "@!?[a-zA-Z_][a-zA-Z0-9_-]*(\\((\\s*[a-zA-Z0-9_-]+\\s*)(,\\s*[a-zA-Z0-9_-]+\\s*)*\\))?"
         }
@@ -1153,14 +1161,6 @@
     },
     "tag-expression": {
       "patterns": [
-        {
-          "name": "keyword.operator.logical.webpipe",
-          "match": "\\b(and|or)\\b"
-        },
-        {
-          "name": "punctuation.parenthesis.webpipe",
-          "match": "[()]"
-        },
         {
           "include": "#tags"
         }
