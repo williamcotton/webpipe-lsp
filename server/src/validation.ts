@@ -274,11 +274,69 @@ export class DocumentValidator {
       }
     }
 
-    // Mock variable references  
+    // Extract GraphQL schema for validation
+    const graphqlSchemaMatch = /graphqlSchema\s*=\s*`([\s\S]*?)`/m.exec(text);
+    const queries = new Set<string>();
+    const mutations = new Set<string>();
+
+    if (graphqlSchemaMatch) {
+      const schema = graphqlSchemaMatch[1];
+
+      // Extract query names from schema
+      const queryTypeMatch = /type\s+Query\s*\{([^}]*)\}/s.exec(schema);
+      if (queryTypeMatch) {
+        const queryFields = queryTypeMatch[1].matchAll(/\s*([A-Za-z_][\w-]*)\s*(?:\([^)]*\))?\s*:\s*/g);
+        for (const match of queryFields) {
+          queries.add(match[1]);
+        }
+      }
+
+      // Extract mutation names from schema
+      const mutationTypeMatch = /type\s+Mutation\s*\{([^}]*)\}/s.exec(schema);
+      if (mutationTypeMatch) {
+        const mutationFields = mutationTypeMatch[1].matchAll(/\s*([A-Za-z_][\w-]*)\s*(?:\([^)]*\))?\s*:\s*/g);
+        for (const match of mutationFields) {
+          mutations.add(match[1]);
+        }
+      }
+    }
+
+    // Also check for query/mutation resolver definitions
+    const queryResolverRe = /query\s+([A-Za-z_][\w-]*)\s*=/g;
+    for (let m; (m = queryResolverRe.exec(text)); ) {
+      queries.add(m[1]);
+    }
+
+    const mutationResolverRe = /mutation\s+([A-Za-z_][\w-]*)\s*=/g;
+    for (let m; (m = mutationResolverRe.exec(text)); ) {
+      mutations.add(m[1]);
+    }
+
+    // Mock GraphQL query/mutation references (query users, mutation createUser)
+    const mockGraphQLRe = /(^|\n)\s*(?:with|and)\s+mock\s+(query|mutation)\s+([A-Za-z_][\w-]*)\s+returning\s+`/g;
+    for (let m; (m = mockGraphQLRe.exec(text)); ) {
+      const type = m[2];
+      const name = m[3];
+      const resolverSet = type === 'query' ? queries : mutations;
+
+      // Only validate if we have schema/resolver information
+      if (resolverSet.size > 0 && !resolverSet.has(name)) {
+        const nameStart = m.index + m[0].lastIndexOf(name);
+        push(DiagnosticSeverity.Warning, nameStart, nameStart + name.length, `Unknown GraphQL ${type} in mock: ${name}`);
+      }
+    }
+
+    // Mock variable references
     const mockVarRe = /(^|\n)\s*(?:with|and)\s+mock\s+([A-Za-z_][\w-]*)\.([A-Za-z_][\w-]*)\s+returning\s+`/g;
     for (let m; (m = mockVarRe.exec(text)); ) {
       const varType = m[2];
       const varName = m[3];
+
+      // Skip GraphQL mocks (query.users, mutation.createUser)
+      if (varType === 'query' || varType === 'mutation') {
+        continue;
+      }
+
       const declared = variablesByType.get(varType);
       if (!declared || !declared.has(varName)) {
         const nameStart = m.index + m[0].lastIndexOf(varName);
@@ -363,12 +421,12 @@ export class DocumentValidator {
 
     // Malformed mock syntax
     const mockHeadLineRe = /(^|\n)(\s*(with|and)\s+mock\b[^\n]*)/g;
-    const mockHeadValid = /^(with|and)\s+mock\s+(?:pipeline\s+[A-Za-z_][\w-]*|[A-Za-z_][\w-]*\.[A-Za-z_][\w-]*|[A-Za-z_][\w-]*)\s+returning\s+`/;
+    const mockHeadValid = /^(with|and)\s+mock\s+(?:pipeline\s+[A-Za-z_][\w-]*|(?:query|mutation)\s+[A-Za-z_][\w-]*|[A-Za-z_][\w-]*\.[A-Za-z_][\w-]*|[A-Za-z_][\w-]*)\s+returning\s+`/;
     for (let m; (m = mockHeadLineRe.exec(text)); ) {
       const lineStart = m.index + (m[1] ? m[1].length : 0);
       const head = m[2].trim();
       if (!mockHeadValid.test(head)) {
-        push(DiagnosticSeverity.Error, lineStart, lineStart + head.length, 'Malformed mock syntax. Expected: with|and mock <middleware>[.<name>] returning `...` or with|and mock pipeline <name> returning `...`');
+        push(DiagnosticSeverity.Error, lineStart, lineStart + head.length, 'Malformed mock syntax. Expected: with|and mock <middleware>[.<name>] returning `...`, with|and mock pipeline <name> returning `...`, or with|and mock query|mutation <name> returning `...`');
       }
     }
   }
@@ -411,6 +469,58 @@ export class DocumentValidator {
   }
 
   private validateAssertions(text: string, push: DiagnosticPush): void {
+    // Extract GraphQL schema for validation
+    const graphqlSchemaMatch = /graphqlSchema\s*=\s*`([\s\S]*?)`/m.exec(text);
+    const queries = new Set<string>();
+    const mutations = new Set<string>();
+
+    if (graphqlSchemaMatch) {
+      const schema = graphqlSchemaMatch[1];
+
+      // Extract query names
+      const queryTypeMatch = /type\s+Query\s*\{([^}]*)\}/s.exec(schema);
+      if (queryTypeMatch) {
+        const queryFields = queryTypeMatch[1].matchAll(/\s*([A-Za-z_][\w-]*)\s*(?:\([^)]*\))?\s*:\s*/g);
+        for (const match of queryFields) {
+          queries.add(match[1]);
+        }
+      }
+
+      // Extract mutation names
+      const mutationTypeMatch = /type\s+Mutation\s*\{([^}]*)\}/s.exec(schema);
+      if (mutationTypeMatch) {
+        const mutationFields = mutationTypeMatch[1].matchAll(/\s*([A-Za-z_][\w-]*)\s*(?:\([^)]*\))?\s*:\s*/g);
+        for (const match of mutationFields) {
+          mutations.add(match[1]);
+        }
+      }
+    }
+
+    // Also check for query/mutation resolver definitions
+    const queryResolverRe = /query\s+([A-Za-z_][\w-]*)\s*=/g;
+    for (let m; (m = queryResolverRe.exec(text)); ) {
+      queries.add(m[1]);
+    }
+
+    const mutationResolverRe = /mutation\s+([A-Za-z_][\w-]*)\s*=/g;
+    for (let m; (m = mutationResolverRe.exec(text)); ) {
+      mutations.add(m[1]);
+    }
+
+    // call query/mutation assertions (call query users with `...`)
+    const callAssertionRe = /(^|\n)\s*(then|and)\s+call\s+(query|mutation)\s+([A-Za-z_][\w-]*)\s+(with(?:\s+arguments)?)\s+`/g;
+    for (let m; (m = callAssertionRe.exec(text)); ) {
+      const callType = m[3]; // query or mutation
+      const callName = m[4];
+      const resolverSet = callType === 'query' ? queries : mutations;
+
+      // Only validate if we have schema/resolver information
+      if (resolverSet.size > 0 && !resolverSet.has(callName)) {
+        const nameStart = m.index + m[0].lastIndexOf(callName);
+        push(DiagnosticSeverity.Warning, nameStart, nameStart + callName.length, `Unknown GraphQL ${callType} in assertion: ${callName}`);
+      }
+    }
+
     // status is NNN
     const statusIsRe = /(^|\n)\s*(then|and)\s+status\s+is\s+(\d{3})\b/g;
     for (let m; (m = statusIsRe.exec(text)); ) {

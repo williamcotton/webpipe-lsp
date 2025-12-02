@@ -86,6 +86,10 @@ export class LanguageProviders {
     const variableHover = this.getVariableHover(lineText, text, word, symbols);
     if (variableHover) return variableHover;
 
+    // GraphQL query/mutation hover
+    const graphqlHover = this.getGraphQLHover(lineText, text, word);
+    if (graphqlHover) return graphqlHover;
+
     // Handlebars partial hover
     const handlebarsHover = this.getHandlebarsHover(text, offset, word, doc, symbols);
     if (handlebarsHover) return handlebarsHover;
@@ -483,6 +487,51 @@ export class LanguageProviders {
     // Find the end of the pipeline declaration
     const start = pos.start;
     const nextDeclRe = /\n(?:(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=)|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:GET|POST|PUT|DELETE\s)|(?:describe\s))/g;
+    nextDeclRe.lastIndex = start;
+    const nextMatch = nextDeclRe.exec(text);
+    const end = nextMatch ? nextMatch.index : text.length;
+
+    let snippet = text.slice(start, end).trimEnd();
+    if (snippet.length > 2400) snippet = snippet.slice(0, 2400) + '\n…';
+    return createMarkdownCodeBlock('webpipe', snippet);
+  }
+
+  private getGraphQLHover(lineText: string, text: string, word: string): Hover | null {
+    let m: RegExpExecArray | null;
+
+    // Check for GraphQL mock context: "with mock query users" or "and mock mutation createUser"
+    if ((m = /^\s*(with|and)\s+mock\s+(query|mutation)\s+([A-Za-z_][\w-]*)/.exec(lineText))) {
+      const resolverType = m[2]; // "query" or "mutation"
+      const resolverName = m[3];
+      if (resolverName === word) {
+        const md = this.formatGraphQLHover(text, resolverType, resolverName);
+        if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
+      }
+    }
+
+    // Check for GraphQL call assertion context: "and call query users with" or "then call mutation createUser with"
+    if ((m = /^\s*(then|and)\s+call\s+(query|mutation)\s+([A-Za-z_][\w-]*)/.exec(lineText))) {
+      const resolverType = m[2]; // "query" or "mutation"
+      const resolverName = m[3];
+      if (resolverName === word) {
+        const md = this.formatGraphQLHover(text, resolverType, resolverName);
+        if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
+      }
+    }
+
+    return null;
+  }
+
+  private formatGraphQLHover(text: string, resolverType: string, resolverName: string): string | null {
+    // Find the GraphQL resolver definition: "query <name> =" or "mutation <name> ="
+    const resolverRe = new RegExp(`\\n(${resolverType}\\s+${resolverName}\\s*=)`, 'g');
+    const match = resolverRe.exec(text);
+    if (!match) return null;
+
+    const start = match.index + 1; // Skip the newline
+
+    // Find the end of the resolver declaration (until next declaration)
+    const nextDeclRe = /\n(?:(?:query|mutation)\s+[A-Za-z_][\w-]*\s*=|(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=)|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:GET|POST|PUT|DELETE|PATCH\s)|(?:describe\s))/g;
     nextDeclRe.lastIndex = start;
     const nextMatch = nextDeclRe.exec(text);
     const end = nextMatch ? nextMatch.index : text.length;
