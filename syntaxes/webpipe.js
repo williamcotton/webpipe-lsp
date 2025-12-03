@@ -64,10 +64,34 @@ export default function(hljs) {
         match: '\\|>'
       },
 
-      // Tags: @tag, @!negated, @flag(args)
+      // Tags: @tag, @!negated, @flag(args), @guard(`jq expr`)
+      // Note: Args can be identifiers or backtick-quoted strings (for @guard JQ expressions)
       {
         scope: 'meta',
-        match: '@!?[a-zA-Z_][a-zA-Z0-9_-]*(\\((\\s*[a-zA-Z0-9_-]+\\s*)(,\\s*[a-zA-Z0-9_-]+\\s*)*\\))?'
+        begin: '@!?[a-zA-Z_][a-zA-Z0-9_-]*\\(',
+        end: '\\)',
+        contains: [
+          {
+            scope: 'string',
+            begin: '`',
+            end: '`',
+            contains: [
+              // Include JQ syntax highlighting for guard expressions
+              { scope: 'variable', match: '\\.[a-zA-Z_][a-zA-Z0-9_]*' },
+              { scope: 'keyword', match: '\\b(and|or|not)\\b' },
+              { scope: 'operator', match: '==|!=|<|>|<=|>=' }
+            ]
+          },
+          {
+            scope: 'literal',
+            match: '[a-zA-Z0-9_-]+'
+          }
+        ]
+      },
+      // Tags without arguments
+      {
+        scope: 'meta',
+        match: '@!?[a-zA-Z_][a-zA-Z0-9_-]*'
       },
 
       // Middleware functions in pipelines (word before colon)

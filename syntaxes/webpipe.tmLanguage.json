@@ -1154,8 +1154,38 @@
           "match": "[()]"
         },
         {
+          "comment": "Tag with backtick argument (e.g., @guard(`expr`))",
+          "begin": "(@!?[a-zA-Z_][a-zA-Z0-9_-]*)\\(",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.modifier.tag.webpipe"
+            }
+          },
+          "end": "\\)",
+          "patterns": [
+            {
+              "name": "string.quoted.other.backtick.webpipe",
+              "begin": "`",
+              "end": "`",
+              "patterns": [
+                {
+                  "include": "#jq-embedded"
+                }
+              ]
+            },
+            {
+              "name": "constant.other.tag-arg.webpipe",
+              "match": "[a-zA-Z0-9_-]+"
+            },
+            {
+              "name": "punctuation.separator.comma.webpipe",
+              "match": ","
+            }
+          ]
+        },
+        {
           "name": "storage.modifier.tag.webpipe",
-          "match": "@!?[a-zA-Z_][a-zA-Z0-9_-]*(\\((\\s*[a-zA-Z0-9_-]+\\s*)(,\\s*[a-zA-Z0-9_-]+\\s*)*\\))?"
+          "match": "@!?[a-zA-Z_][a-zA-Z0-9_-]*"
         }
       ]
     },
