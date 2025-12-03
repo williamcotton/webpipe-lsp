@@ -7,9 +7,6 @@
   ],
   "patterns": [
     {
-      "include": "#comments"
-    },
-    {
       "include": "#config-definition"
     },
     {
@@ -33,6 +30,9 @@
     ,
     {
       "include": "#general-numbers"
+    },
+    {
+      "include": "#comments"
     }
   ],
   "repository": {
@@ -1079,12 +1079,34 @@
           }
         },
         {
+          "begin": "\\b(then|and)\\s+(selector)\\s+",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.bdd.webpipe" },
+            "2": { "name": "keyword.control.bdd.helper.webpipe" }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "name": "string.quoted.double.webpipe",
+              "match": "\"[^\"]*\""
+            },
+            {
+              "name": "keyword.control.bdd.helper.webpipe",
+              "match": "\\b(exists|does|not|exist|text|count|attribute|equals|contains|matches|is|greater|than|less)\\b"
+            },
+            {
+              "name": "constant.numeric.webpipe",
+              "match": "\\b\\d+\\b"
+            }
+          ]
+        },
+        {
           "name": "keyword.control.bdd.webpipe",
           "match": "\\b(describe|it|with|when|then|and)\\b"
         },
         {
           "name": "keyword.control.bdd.helper.webpipe",
-          "match": "\\b(executing|calling|input|output|contentType|equals|contains|matches|in|status|mock|returning|call|query|mutation)\\b"
+          "match": "\\b(executing|calling|input|output|contentType|equals|contains|matches|in|status|mock|returning|call|query|mutation|selector|exists|attribute|text|count)\\b"
         }
       ]
     },

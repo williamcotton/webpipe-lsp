@@ -220,10 +220,30 @@ export default function(hljs) {
         ]
       },
 
+      // Selector syntax highlighting
+      {
+        begin: '\\b(then|and)\\s+(selector)\\s+',
+        beginScope: {
+          1: 'keyword',
+          2: 'keyword'
+        },
+        end: '$',
+        contains: [
+          {
+            scope: 'string',
+            match: '"[^"]*"'
+          },
+          {
+            scope: 'keyword',
+            match: '\\b(exists|does|not|exist|text|count|attribute|equals|contains|matches|is|greater|than|less)\\b'
+          }
+        ]
+      },
+
       // Other BDD keywords
       {
         scope: 'keyword',
-        match: '\\b(with|when|then|and|executing|calling|input|output|equals|contains|matches|in|status|mock|returning)\\b'
+        match: '\\b(with|when|then|and|executing|calling|input|output|equals|contains|matches|in|status|mock|returning|selector|exists|attribute|text|count)\\b'
       }
     ]
   };
