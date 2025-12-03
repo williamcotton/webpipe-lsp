@@ -1079,6 +1079,21 @@
           }
         },
         {
+          "comment": "Let variable declaration in test blocks",
+          "match": "^\\s*(let)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s*(=)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.let.webpipe"
+            },
+            "2": {
+              "name": "variable.other.let.webpipe"
+            },
+            "3": {
+              "name": "keyword.operator.assignment.webpipe"
+            }
+          }
+        },
+        {
           "begin": "\\b(then|and)\\s+(selector)\\s+",
           "beginCaptures": {
             "1": { "name": "keyword.control.bdd.webpipe" },
@@ -1126,7 +1141,7 @@
         },
         {
           "name": "keyword.control.bdd.webpipe",
-          "match": "\\b(describe|it|with|when|then|and)\\b"
+          "match": "\\b(describe|it|with|when|then|and|let)\\b"
         },
         {
           "name": "keyword.control.bdd.helper.webpipe",
@@ -1210,6 +1225,18 @@
           "name": "meta.embedded.json.webpipe",
           "contentName": "source.json",
           "patterns": [
+            {
+              "comment": "Handlebars template variables",
+              "match": "\\{\\{([a-zA-Z_][a-zA-Z0-9_-]*)\\}\\}",
+              "captures": {
+                "0": {
+                  "name": "meta.template.expression.webpipe"
+                },
+                "1": {
+                  "name": "variable.other.template.webpipe"
+                }
+              }
+            },
             {
               "include": "source.json"
             }

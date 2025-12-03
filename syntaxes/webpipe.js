@@ -220,6 +220,23 @@ export default function(hljs) {
         ]
       },
 
+      // Let variable declarations in tests
+      {
+        match: '^\\s*(let)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s*(=)',
+        captures: {
+          1: { scope: 'keyword' },
+          2: { scope: 'variable' },
+          3: { scope: 'operator' }
+        }
+      },
+
+      // Handlebars template variables
+      {
+        scope: 'variable',
+        match: '\\{\\{[a-zA-Z_][a-zA-Z0-9_-]*\\}\\}',
+        contains: []
+      },
+
       // Selector syntax highlighting
       {
         begin: '\\b(then|and)\\s+(selector)\\s+',
@@ -243,7 +260,7 @@ export default function(hljs) {
       // Other BDD keywords
       {
         scope: 'keyword',
-        match: '\\b(with|when|then|and|executing|calling|input|output|equals|contains|matches|in|status|mock|returning|selector|exists|attribute|text|count)\\b'
+        match: '\\b(let|with|when|then|and|executing|calling|input|output|equals|contains|matches|in|status|mock|returning|selector|exists|attribute|text|count)\\b'
       }
     ]
   };

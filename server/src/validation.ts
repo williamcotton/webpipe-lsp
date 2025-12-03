@@ -75,7 +75,8 @@ export class DocumentValidator {
       this.validateUnknownSteps(text, push);
       this.validateHandlebarsPartialReferences(text, push);
       this.validateJoinAsyncReferences(text, push);
-      
+      this.validateTestLetVariables(text, push, program);
+
     } catch (_e) {
       // Best-effort validation; avoid crashing on regex issues
     }
@@ -85,6 +86,7 @@ export class DocumentValidator {
     const varDeclRe = new RegExp(REGEX_PATTERNS.VAR_DECL.source, REGEX_PATTERNS.VAR_DECL.flags);
     for (let m; (m = varDeclRe.exec(text)); ) {
       const varType = m[2];
+      if (varType === 'let') continue;
       if (!KNOWN_MIDDLEWARE.has(varType)) {
         const typeStart = m.index + m[0].indexOf(varType);
         push(
@@ -136,6 +138,7 @@ export class DocumentValidator {
     const varDeclSeen = new Set<string>();
     for (let m; (m = varDeclRe.exec(text)); ) {
       const varType = m[2];
+      if (varType === 'let') continue;
       const varName = m[3];
       const key = `${varType}::${varName}`;
       if (varDeclSeen.has(key)) {
@@ -693,5 +696,114 @@ export class DocumentValidator {
     }
 
     return results;
+  }
+
+  /**
+   * Validates that Handlebars template variables ({{varName}}) used in test blocks
+   * are defined with 'let' statements within the same test.
+   */
+  private validateTestLetVariables(text: string, push: DiagnosticPush, program?: { describes: Array<{ name: string; tests: Array<any> }> }): void {
+    if (!program || !program.describes) return;
+
+    // Helper to extract Handlebars variable references from a string
+    const extractHandlebarsVariables = (str: string, baseOffset: number): Array<{ name: string; start: number; end: number }> => {
+      const regex = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g;
+      const variables: Array<{ name: string; start: number; end: number }> = [];
+      let match;
+
+      while ((match = regex.exec(str)) !== null) {
+        variables.push({
+          name: match[1],
+          start: baseOffset + match.index,
+          end: baseOffset + match.index + match[0].length
+        });
+      }
+
+      return variables;
+    };
+
+    // Helper to find the offset of a substring in text after a given position
+    const findOffset = (searchAfter: number, searchFor: string): number => {
+      const idx = text.indexOf(searchFor, searchAfter);
+      return idx !== -1 ? idx : searchAfter;
+    };
+
+    // Process each describe block
+    for (const describe of program.describes) {
+      if (!describe.tests) continue;
+
+      // Find the describe block in the text
+      const describeRe = new RegExp(`\\bdescribe\\s+"${this.escapeRegex(describe.name || '')}"`, 'g');
+      const describeMatch = describeRe.exec(text);
+      if (!describeMatch) continue;
+
+      const describeStart = describeMatch.index;
+
+      for (const test of describe.tests) {
+        if (!test.name) continue;
+
+        // Find this specific test in the text after the describe block
+        const itRe = new RegExp(`\\bit\\s+"${this.escapeRegex(test.name)}"`, 'g');
+        itRe.lastIndex = describeStart;
+        const itMatch = itRe.exec(text);
+        if (!itMatch) continue;
+
+        const testStart = itMatch.index;
+
+        // Track which variables are defined in this test
+        const definedVariables = new Set<string>();
+        if (test.variables) {
+          for (const [name] of test.variables) {
+            definedVariables.add(name);
+          }
+        }
+
+        // Helper to validate a string and report undefined variables
+        const validateString = (str: string | undefined, searchAfter: number, context: string) => {
+          if (!str) return;
+
+          const offset = findOffset(searchAfter, str.substring(0, Math.min(50, str.length)));
+          const vars = extractHandlebarsVariables(str, offset);
+
+          for (const v of vars) {
+            if (!definedVariables.has(v.name)) {
+              push(
+                DiagnosticSeverity.Error,
+                v.start,
+                v.end,
+                `Variable '${v.name}' is not defined in this test block`
+              );
+            }
+          }
+        };
+
+        // Validate path in 'when calling' statements
+        if (test.when && test.when.kind === 'CallingRoute' && test.when.path) {
+          validateString(test.when.path, testStart, 'path');
+        }
+
+        // Validate input, body, headers, cookies
+        validateString(test.input, testStart, 'input');
+        validateString(test.body, testStart, 'body');
+        validateString(test.headers, testStart, 'headers');
+        validateString(test.cookies, testStart, 'cookies');
+
+        // Validate conditions (assertions)
+        if (test.conditions) {
+          for (const condition of test.conditions) {
+            if (condition.value) {
+              validateString(condition.value, testStart, 'condition value');
+            }
+            if (condition.selector) {
+              validateString(condition.selector, testStart, 'selector');
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private escapeRegex(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 }
