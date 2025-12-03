@@ -1223,10 +1223,9 @@
     "test-input-jq": {
       "patterns": [
         {
-          "begin": "^\\s*(with|and)\\s+(body|input|cookies|headers)\\s*`",
+          "begin": "^\\s*(?:with|and\\s+with)\\s+(body|input|cookies|headers)\\s*`",
           "beginCaptures": {
-            "1": { "name": "keyword.control.bdd.webpipe" },
-            "2": { "name": "keyword.control.bdd.helper.webpipe" }
+            "1": { "name": "keyword.control.bdd.helper.webpipe" }
           },
           "end": "`",
           "name": "meta.test.input.jq.webpipe",
@@ -1236,12 +1235,11 @@
           ]
         },
         {
-          "begin": "^\\s*(with|and)\\s+(mock)\\s+([a-zA-Z_][a-zA-Z0-9_.-]*)\\s+(returning)\\s*`",
+          "begin": "^\\s*(?:with|and)\\s+(mock)\\s+([a-zA-Z_][a-zA-Z0-9_.-]*)\\s+(returning)\\s*`",
           "beginCaptures": {
-            "1": { "name": "keyword.control.bdd.webpipe" },
-            "2": { "name": "keyword.control.bdd.helper.webpipe" },
-            "3": { "name": "entity.name.function.webpipe" },
-            "4": { "name": "keyword.control.bdd.helper.webpipe" }
+            "1": { "name": "keyword.control.bdd.helper.webpipe" },
+            "2": { "name": "entity.name.function.webpipe" },
+            "3": { "name": "keyword.control.bdd.helper.webpipe" }
           },
           "end": "`",
           "name": "meta.test.mock.jq.webpipe",
