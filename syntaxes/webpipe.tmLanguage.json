@@ -1087,8 +1087,32 @@
           "end": "$",
           "patterns": [
             {
+              "begin": "(?<=selector\\s+)\"",
+              "end": "\"",
+              "name": "string.quoted.double.webpipe",
+              "patterns": [
+                {
+                  "include": "#css-selector-syntax"
+                }
+              ]
+            },
+            {
+              "begin": "(?<=selector\\s+)`",
+              "end": "`",
+              "name": "string.quoted.backtick.webpipe",
+              "patterns": [
+                {
+                  "include": "#css-selector-syntax"
+                }
+              ]
+            },
+            {
               "name": "string.quoted.double.webpipe",
               "match": "\"[^\"]*\""
+            },
+            {
+              "name": "string.quoted.backtick.webpipe",
+              "match": "`[^`]*`"
             },
             {
               "name": "keyword.control.bdd.helper.webpipe",
@@ -1107,6 +1131,30 @@
         {
           "name": "keyword.control.bdd.helper.webpipe",
           "match": "\\b(executing|calling|input|output|contentType|equals|contains|matches|in|status|mock|returning|call|query|mutation|selector|exists|attribute|text|count)\\b"
+        }
+      ]
+    },
+    "css-selector-syntax": {
+      "patterns": [
+        {
+          "name": "entity.other.attribute-name.id.css",
+          "match": "#[a-zA-Z0-9_-]+"
+        },
+        {
+          "name": "entity.other.attribute-name.class.css",
+          "match": "\\.[a-zA-Z0-9_-]+"
+        },
+        {
+          "name": "keyword.operator.combinator.css",
+          "match": "[>+~]"
+        },
+        {
+          "name": "entity.name.tag.css",
+          "match": "\\b[a-zA-Z][a-zA-Z0-9]*\\b"
+        },
+        {
+          "name": "punctuation.definition.entity.css",
+          "match": "[\\[\\]:=]"
         }
       ]
     },
