@@ -367,19 +367,7 @@ export class DocumentValidator {
   }
 
   private validateJsonBlocks(text: string, push: DiagnosticPush): void {
-    // JSON validation for with input
-    const withInputRe = /(^|\n)\s*with\s+input\s+`([\s\S]*?)`/g;
-    for (let m; (m = withInputRe.exec(text)); ) {
-      const whole = m[0];
-      const content = m[2];
-      try {
-        JSON.parse(content);
-      } catch (e) {
-        const relStart = whole.indexOf(content);
-        const start = m.index + relStart;
-        push(DiagnosticSeverity.Error, start, start + content.length, `Invalid JSON in with input: ${(e as Error).message}`);
-      }
-    }
+    // Note: with input now uses JQ syntax instead of JSON, so no JSON validation needed
 
     // Head validation for with input
     const withInputHeadAny = /(^|\n)\s*with\s+input\b([^\n]*)/g;
@@ -391,19 +379,7 @@ export class DocumentValidator {
       }
     }
 
-    // JSON validation for mocks
-    const mockJsonRe = /(^|\n)\s*(?:with|and)\s+mock\s+(?:pipeline\s+[A-Za-z_][\w-]*|[A-Za-z_][\w-]*\.[A-Za-z_][\w-]*|[A-Za-z_][\w-]*)\s+returning\s+`([\s\S]*?)`/g;
-    for (let m; (m = mockJsonRe.exec(text)); ) {
-      const whole = m[0];
-      const content = m[2];
-      try {
-        JSON.parse(content);
-      } catch (e) {
-        const relStart = whole.indexOf(content);
-        const start = m.index + relStart;
-        push(DiagnosticSeverity.Error, start, start + content.length, `Invalid JSON in mock returning: ${(e as Error).message}`);
-      }
-    }
+    // Note: mock returning now uses JQ syntax instead of JSON, so no JSON validation needed
   }
 
   private validateMiddlewareReferences(text: string, push: DiagnosticPush): void {
