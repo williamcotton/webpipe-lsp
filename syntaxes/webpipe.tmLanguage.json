@@ -1145,16 +1145,43 @@
           "match": "\\.[a-zA-Z0-9_-]+"
         },
         {
+          "begin": "\\[",
+          "end": "\\]",
+          "name": "meta.attribute-selector.css",
+          "patterns": [
+            {
+              "name": "entity.other.attribute-name.css",
+              "match": "[a-zA-Z][a-zA-Z0-9_-]*"
+            },
+            {
+              "name": "keyword.operator.css",
+              "match": "[*^$~|]?="
+            },
+            {
+              "name": "string.quoted.double.css",
+              "match": "\"[^\"]*\""
+            },
+            {
+              "name": "string.quoted.single.css",
+              "match": "'[^']*'"
+            }
+          ]
+        },
+        {
+          "name": "entity.other.pseudo-class.css",
+          "match": ":[a-zA-Z][a-zA-Z0-9_-]*(?:\\([^)]*\\))?"
+        },
+        {
+          "name": "entity.other.pseudo-element.css",
+          "match": "::[a-zA-Z][a-zA-Z0-9_-]*"
+        },
+        {
           "name": "keyword.operator.combinator.css",
           "match": "[>+~]"
         },
         {
           "name": "entity.name.tag.css",
           "match": "\\b[a-zA-Z][a-zA-Z0-9]*\\b"
-        },
-        {
-          "name": "punctuation.definition.entity.css",
-          "match": "[\\[\\]:=]"
         }
       ]
     },
