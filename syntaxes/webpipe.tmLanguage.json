@@ -1161,6 +1161,14 @@
               ]
             },
             {
+              "comment": "Handlebars expressions (bare, not in strings)",
+              "match": "\\{\\{([a-zA-Z_][a-zA-Z0-9_-]*)\\}\\}",
+              "captures": {
+                "0": { "name": "meta.template.expression.webpipe" },
+                "1": { "name": "variable.other.handlebars.webpipe" }
+              }
+            },
+            {
               "name": "string.quoted.double.webpipe",
               "match": "\"[^\"]*\""
             },
@@ -1177,6 +1185,36 @@
               "match": "\\b\\d+\\b"
             }
           ]
+        },
+        {
+          "name": "string.quoted.double.webpipe",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.webpipe",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.webpipe",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.webpipe",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "comment": "Handlebars expressions (bare, not in strings)",
+          "match": "\\{\\{([a-zA-Z_][a-zA-Z0-9_-]*)\\}\\}",
+          "captures": {
+            "0": { "name": "meta.template.expression.webpipe" },
+            "1": { "name": "variable.other.handlebars.webpipe" }
+          }
         },
         {
           "name": "keyword.control.bdd.webpipe",
