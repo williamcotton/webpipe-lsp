@@ -1086,8 +1086,8 @@
         },
         {
           "comment": "Let variable declaration in test blocks",
-          "match": "^\\s*(let)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s*(=)",
-          "captures": {
+          "begin": "^\\s*(let)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s*(=)",
+          "beginCaptures": {
             "1": {
               "name": "keyword.control.let.webpipe"
             },
@@ -1097,7 +1097,40 @@
             "3": {
               "name": "keyword.operator.assignment.webpipe"
             }
-          }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "name": "string.quoted.double.webpipe",
+              "begin": "\"",
+              "end": "\"",
+              "patterns": [
+                {
+                  "name": "constant.character.escape.webpipe",
+                  "match": "\\\\."
+                }
+              ]
+            },
+            {
+              "name": "string.quoted.single.webpipe",
+              "begin": "'",
+              "end": "'",
+              "patterns": [
+                {
+                  "name": "constant.character.escape.webpipe",
+                  "match": "\\\\."
+                }
+              ]
+            },
+            {
+              "name": "constant.language.boolean.webpipe",
+              "match": "\\b(true|false|null)\\b"
+            },
+            {
+              "name": "constant.numeric.webpipe",
+              "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+            }
+          ]
         },
         {
           "begin": "\\b(then|and)\\s+(selector)\\s+",
