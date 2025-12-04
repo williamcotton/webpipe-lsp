@@ -3,6 +3,7 @@ import { Diagnostic, DiagnosticSeverity, Connection } from 'vscode-languageserve
 import { VALID_HTTP_METHODS, KNOWN_MIDDLEWARE, KNOWN_STEPS, REGEX_PATTERNS } from './constants';
 import { collectHandlebarsSymbols } from './symbol-collector';
 import { DocumentCache } from './document-cache';
+import { Describe } from 'webpipe-js';
 
 interface DiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
@@ -676,9 +677,9 @@ export class DocumentValidator {
 
   /**
    * Validates that Handlebars template variables ({{varName}}) used in test blocks
-   * are defined with 'let' statements within the same test.
+   * are defined with 'let' statements within the same test or describe block.
    */
-  private validateTestLetVariables(text: string, push: DiagnosticPush, program?: { describes: Array<{ name: string; tests: Array<any> }> }): void {
+  private validateTestLetVariables(text: string, push: DiagnosticPush, program?: { describes: Array<Describe> }): void {
     if (!program || !program.describes) return;
 
     // Helper to extract Handlebars variable references from a string
@@ -727,7 +728,14 @@ export class DocumentValidator {
         const testStart = itMatch.index;
 
         // Track which variables are defined in this test
+        // Start with describe-level variables
         const definedVariables = new Set<string>();
+        if (describe.variables) {
+          for (const [name] of describe.variables) {
+            definedVariables.add(name);
+          }
+        }
+        // Test-level variables override describe-level
         if (test.variables) {
           for (const [name] of test.variables) {
             definedVariables.add(name);
