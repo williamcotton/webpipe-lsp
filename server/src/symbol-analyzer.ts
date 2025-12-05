@@ -1,7 +1,7 @@
-import { Program } from 'webpipe-js';
-import { getVariableRanges, getPipelineRanges } from 'webpipe-js';
-import { SymbolTable, PositionInfo } from './types';
-import { collectReferencePositions, collectHandlebarsSymbols } from './symbol-collector';
+import { Program, TestLetVariable } from 'webpipe-js';
+import { getVariableRanges, getPipelineRanges, getTestLetVariables } from 'webpipe-js';
+import { SymbolTable, PositionInfo, TestLetVariablePosition } from './types';
+import { collectReferencePositions, collectHandlebarsSymbols, collectTestLetVariableReferences } from './symbol-collector';
 
 /**
  * Builds a complete symbol table from the parsed AST and source text.
@@ -28,6 +28,7 @@ export function buildSymbolTable(program: Program, text: string): SymbolTable {
   // Get declaration positions from webpipe-js utilities
   const variableRanges = getVariableRanges(text);
   const pipelineRanges = getPipelineRanges(text);
+  const testLetVariables = getTestLetVariables(text);
 
   const variablePositions = new Map<string, PositionInfo>();
   for (const [key, r] of variableRanges.entries()) {
@@ -39,8 +40,19 @@ export function buildSymbolTable(program: Program, text: string): SymbolTable {
     pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
   }
 
+  const testLetVariablePositions: TestLetVariablePosition[] = testLetVariables.map(v => ({
+    name: v.name,
+    describeName: v.describeName,
+    testName: v.testName,
+    start: v.start,
+    length: v.end - v.start
+  }));
+
   // Get reference positions (still using regex for now, but centralized)
   const { variableRefs, pipelineRefs } = collectReferencePositions(text);
+
+  // Get test let variable references (scope-aware)
+  const testLetVariableRefs = collectTestLetVariableReferences(text, program);
 
   // Get handlebars symbols
   const handlebars = collectHandlebarsSymbols(text);
@@ -50,8 +62,10 @@ export function buildSymbolTable(program: Program, text: string): SymbolTable {
     pipelines,
     variableRefs,
     pipelineRefs,
+    testLetVariableRefs,
     variablePositions,
     pipelinePositions,
+    testLetVariablePositions,
     handlebars
   };
 }

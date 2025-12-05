@@ -161,3 +161,97 @@ export function getLetVariableValue(
 
   return null;
 }
+
+/**
+ * Find the text range of a describe block
+ */
+export function findDescribeBlockRange(
+  text: string,
+  describe: Describe
+): { start: number; end: number } | null {
+  const describeRe = new RegExp(`\\bdescribe\\s+"${escapeRegex(describe.name || '')}"`, 'g');
+  const describeMatch = describeRe.exec(text);
+  if (!describeMatch) return null;
+
+  const describeStart = describeMatch.index;
+
+  // Find the end of this describe block (next describe or end of file)
+  const nextDescribeRe = /\n\s*describe\s+"/g;
+  nextDescribeRe.lastIndex = describeStart + 1;
+  const nextDescribeMatch = nextDescribeRe.exec(text);
+  const describeEnd = nextDescribeMatch ? nextDescribeMatch.index : text.length;
+
+  return { start: describeStart, end: describeEnd };
+}
+
+/**
+ * Find the text range of a test block within a describe
+ */
+export function findTestBlockRange(
+  text: string,
+  describeStart: number,
+  test: Describe['tests'][0]
+): { start: number; end: number } | null {
+  if (!test.name) return null;
+
+  const itRe = new RegExp(`\\bit\\s+"${escapeRegex(test.name)}"`, 'g');
+  itRe.lastIndex = describeStart;
+  const itMatch = itRe.exec(text);
+  if (!itMatch) return null;
+
+  const testStart = itMatch.index;
+
+  // Find the end of this test (next test or end of describe)
+  const nextTestRe = /\n\s*it\s+"/g;
+  nextTestRe.lastIndex = testStart + 1;
+  const nextTestMatch = nextTestRe.exec(text);
+  const testEnd = nextTestMatch ? nextTestMatch.index : text.length;
+
+  return { start: testStart, end: testEnd };
+}
+
+/**
+ * Extract JQ variables from text, excluding GraphQL contexts
+ * GraphQL contexts are identified by `graphql:` backtick blocks
+ */
+export function extractJqVariablesExcludingGraphQL(
+  str: string,
+  baseOffset: number
+): Array<{ name: string; start: number; end: number }> {
+  // First, find all graphql: backtick blocks to exclude (positions relative to str)
+  const graphqlRanges: Array<{ start: number; end: number }> = [];
+  const graphqlRe = /\|>\s*graphql\s*:\s*`([\s\S]*?)`/g;
+  let match;
+
+  while ((match = graphqlRe.exec(str)) !== null) {
+    // The range of the backtick content (excluding the backticks themselves)
+    const contentStart = match.index + match[0].indexOf('`') + 1;
+    const contentEnd = contentStart + match[1].length;
+    graphqlRanges.push({ start: contentStart, end: contentEnd });
+  }
+
+  // Extract all JQ variables (positions relative to str, starting at 0)
+  const jqVars = extractJqVariables(str, 0);
+  const filtered: Array<{ name: string; start: number; end: number }> = [];
+
+  for (const v of jqVars) {
+    const varStart = v.start;  // Already relative to str
+    const varEnd = v.end;
+
+    // Check if this variable is within any GraphQL range
+    const inGraphQL = graphqlRanges.some(
+      range => varStart >= range.start && varEnd <= range.end
+    );
+
+    if (!inGraphQL) {
+      // Add baseOffset to convert to absolute positions
+      filtered.push({
+        name: v.name,
+        start: v.start + baseOffset,
+        end: v.end + baseOffset
+      });
+    }
+  }
+
+  return filtered;
+}

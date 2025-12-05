@@ -4,35 +4,20 @@ import {
   CodeLensParams, DocumentHighlightParams, CodeActionParams, CodeAction,
   CodeActionKind, TextEdit
 } from 'vscode-languageserver/node';
-import {
-  collectReferencePositions,
-  collectHandlebarsSymbols
-} from './symbol-collector';
 import { getWordAt } from './utils';
-import { getVariableRanges, getPipelineRanges } from 'webpipe-js';
 import { DocumentCache } from './document-cache';
+import { createScopedKey } from './symbol-collector';
 
 export class UIProviders {
   constructor(private cache: DocumentCache) {}
 
-  onCodeLens(params: CodeLensParams, doc: TextDocument): CodeLens[] {
-    const text = this.cache.getText(doc);
-    const variableRanges = getVariableRanges(text);
-    const pipelineRanges = getPipelineRanges(text);
-    const variablePositions = new Map<string, { start: number; length: number }>();
-    for (const [key, r] of variableRanges.entries()) {
-      variablePositions.set(key, { start: r.start, length: r.end - r.start });
-    }
-    const pipelinePositions = new Map<string, { start: number; length: number }>();
-    for (const [name, r] of pipelineRanges.entries()) {
-      pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
-    }
-    const { variableRefs, pipelineRefs } = collectReferencePositions(text);
+  onCodeLens(_params: CodeLensParams, doc: TextDocument): CodeLens[] {
+    const symbols = this.cache.getSymbols(doc);
     const lenses: CodeLens[] = [];
 
     // Pipeline code lenses
-    for (const [name, pos] of pipelinePositions.entries()) {
-      const refs = pipelineRefs.get(name) || [];
+    for (const [name, pos] of symbols.pipelinePositions.entries()) {
+      const refs = symbols.pipelineRefs.get(name) || [];
       const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
       const locations = refs.map(r => Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
       lenses.push({
@@ -46,9 +31,25 @@ export class UIProviders {
     }
 
     // Variable code lenses (excluding handlebars)
-    for (const [key, pos] of variablePositions.entries()) {
+    for (const [key, pos] of symbols.variablePositions.entries()) {
       if (key.startsWith('handlebars::')) continue;
-      const refs = variableRefs.get(key) || [];
+      const refs = symbols.variableRefs.get(key) || [];
+      const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
+      const locations = refs.map(r => Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
+      lenses.push({
+        range,
+        command: {
+          title: `${locations.length} reference${locations.length === 1 ? '' : 's'}`,
+          command: 'webpipe.showReferences',
+          arguments: [doc.uri, range.start, locations]
+        }
+      });
+    }
+
+    // Test let variable code lenses
+    for (const pos of symbols.testLetVariablePositions) {
+      const scopedKey = createScopedKey(pos.describeName, pos.name, pos.testName);
+      const refs = symbols.testLetVariableRefs.get(scopedKey) || [];
       const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
       const locations = refs.map(r => Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
       lenses.push({
@@ -62,10 +63,9 @@ export class UIProviders {
     }
 
     // Handlebars partial code lenses
-    const hb = collectHandlebarsSymbols(text);
-    for (const [name, decl] of hb.declByName.entries()) {
+    for (const [name, decl] of symbols.handlebars.declByName.entries()) {
       const range = { start: doc.positionAt(decl.nameStart), end: doc.positionAt(decl.nameEnd) };
-      const uses = hb.usagesByName.get(name) || [];
+      const uses = symbols.handlebars.usagesByName.get(name) || [];
       const locations = uses.map(u => Location.create(doc.uri, { start: doc.positionAt(u.start), end: doc.positionAt(u.end) }));
       lenses.push({
         range,
@@ -82,22 +82,12 @@ export class UIProviders {
 
   onDocumentHighlight(params: DocumentHighlightParams, doc: TextDocument): DocumentHighlight[] | null {
     const text = this.cache.getText(doc);
-    const variableRanges = getVariableRanges(text);
-    const pipelineRanges = getPipelineRanges(text);
-    const variablePositions = new Map<string, { start: number; length: number }>();
-    for (const [key, r] of variableRanges.entries()) {
-      variablePositions.set(key, { start: r.start, length: r.end - r.start });
-    }
-    const pipelinePositions = new Map<string, { start: number; length: number }>();
-    for (const [name, r] of pipelineRanges.entries()) {
-      pipelinePositions.set(name, { start: r.start, length: r.end - r.start });
-    }
-    const { variableRefs, pipelineRefs } = collectReferencePositions(text);
+    const symbols = this.cache.getSymbols(doc);
     const pos = params.position;
     const offset = doc.offsetAt(pos);
     const wordInfo = getWordAt(text, offset);
     if (!wordInfo) return null;
-    
+
     const { word } = wordInfo;
     const lineStart = text.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
     const nextNl = text.indexOf('\n', offset);
@@ -122,8 +112,8 @@ export class UIProviders {
 
     // Pipeline highlights
     if (this.isPipelineContext(lineText)) {
-      const decl = pipelinePositions.get(word);
-      const refs = pipelineRefs.get(word) || [];
+      const decl = symbols.pipelinePositions.get(word);
+      const refs = symbols.pipelineRefs.get(word) || [];
       addRanges(decl, refs);
       return highlights.length ? highlights : null;
     }
@@ -131,8 +121,8 @@ export class UIProviders {
     // Variable highlights
     const variableKey = this.getVariableKey(lineText, word);
     if (variableKey) {
-      const decl = variablePositions.get(variableKey);
-      const refs = variableRefs.get(variableKey) || [];
+      const decl = symbols.variablePositions.get(variableKey);
+      const refs = symbols.variableRefs.get(variableKey) || [];
       addRanges(decl, refs);
       return highlights.length ? highlights : null;
     }

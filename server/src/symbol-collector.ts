@@ -1,5 +1,17 @@
 import { REGEX_PATTERNS } from './constants';
 import { VariablesByType, DeclarationPositions, ReferencePositions, RangeAbs, HandlebarsSymbols } from './types';
+import { extractHandlebarsVariables, extractJqVariablesExcludingGraphQL, findDescribeBlockRange, findTestBlockRange } from './test-variable-utils';
+import { Program } from 'webpipe-js';
+
+/**
+ * Creates a scoped key for test let variables to avoid collisions
+ * Uses null character as delimiter since it cannot appear in describe/test names
+ */
+export function createScopedKey(describeName: string, varName: string, testName?: string): string {
+  return testName
+    ? `${describeName}\x00${testName}\x00${varName}`
+    : `${describeName}\x00${varName}`;
+}
 
 export function collectVariablesAndPipelines(text: string): VariablesByType {
   const variablesByType = new Map<string, Set<string>>();
@@ -220,4 +232,99 @@ export function collectHandlebarsSymbols(text: string): HandlebarsSymbols {
   }
 
   return { declByName, contentRanges, usagesByName, inlineDefsByContent };
+}
+
+/**
+ * Collects references to test let variables (both {{varName}} and $varName)
+ * Returns a map of scopedKey -> array of reference positions
+ *
+ * This is scope-aware:
+ * - Describe-level variables can be referenced anywhere in the describe block
+ * - Test-level variables can only be referenced within their test block
+ * - GraphQL contexts (graphql: `...`) are excluded when searching for $varName
+ * - Keys are scoped using createScopedKey to avoid collisions between describe blocks
+ */
+export function collectTestLetVariableReferences(
+  text: string,
+  program: Program
+): Map<string, Array<{ start: number; length: number }>> {
+  const refs = new Map<string, Array<{ start: number; length: number }>>();
+
+  const addRef = (scopedKey: string, start: number, length: number) => {
+    if (!refs.has(scopedKey)) refs.set(scopedKey, []);
+    refs.get(scopedKey)!.push({ start, length });
+  };
+
+  // Process each describe block
+  for (const describe of program.describes) {
+    const describeRange = findDescribeBlockRange(text, describe);
+    if (!describeRange) continue;
+
+    const describeText = text.substring(describeRange.start, describeRange.end);
+
+    // Collect describe-level let variables
+    const describeVars = new Set<string>();
+    if (describe.variables) {
+      for (const [name] of describe.variables) {
+        describeVars.add(name);
+      }
+    }
+
+    // Search for describe-level variable references within the entire describe block
+    for (const varName of describeVars) {
+      const scopedKey = createScopedKey(describe.name, varName);
+
+      // Handlebars {{varName}}
+      const handlebarsVars = extractHandlebarsVariables(describeText, describeRange.start);
+      for (const v of handlebarsVars) {
+        if (v.name === varName) {
+          addRef(scopedKey, v.start, v.end - v.start);
+        }
+      }
+
+      // JQ $varName (excluding GraphQL contexts)
+      const jqVars = extractJqVariablesExcludingGraphQL(describeText, describeRange.start);
+      for (const v of jqVars) {
+        if (v.name === varName) {
+          addRef(scopedKey, v.start, v.end - v.start);
+        }
+      }
+    }
+
+    // Process each test block for test-level variables
+    if (describe.tests) {
+      for (const test of describe.tests) {
+        const testRange = findTestBlockRange(text, describeRange.start, test);
+        if (!testRange) continue;
+
+        const testText = text.substring(testRange.start, testRange.end);
+
+        // Collect test-level let variables (these override describe-level)
+        if (test.variables) {
+          for (const [name] of test.variables) {
+            const scopedKey = createScopedKey(describe.name, name, test.name);
+
+            // Search only within this test's scope
+            // Handlebars {{varName}}
+            const handlebarsVars = extractHandlebarsVariables(testText, testRange.start);
+            for (const v of handlebarsVars) {
+              if (v.name === name) {
+                addRef(scopedKey, v.start, v.end - v.start);
+              }
+            }
+
+            // JQ $varName (excluding GraphQL contexts)
+            const jqVars = extractJqVariablesExcludingGraphQL(testText, testRange.start);
+            for (const v of jqVars) {
+              if (v.name === name) {
+                addRef(scopedKey, v.start, v.end - v.start);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return refs;
 }

@@ -8,6 +8,14 @@ export interface PositionInfo {
   length: number;
 }
 
+export interface TestLetVariablePosition {
+  name: string;
+  describeName: string;
+  testName?: string;
+  start: number;
+  length: number;
+}
+
 export interface VariablesByType {
   variablesByType: Map<string, Set<string>>;
   pipelineNames: Set<string>;
@@ -52,10 +60,12 @@ export interface SymbolTable {
   // Reference positions (from regex analysis, to be migrated to AST)
   variableRefs: Map<string, Array<PositionInfo>>; // "varType::varName" -> references
   pipelineRefs: Map<string, Array<PositionInfo>>; // pipelineName -> references
+  testLetVariableRefs: Map<string, Array<PositionInfo>>; // test let varName -> references
 
   // Declaration positions (from webpipe-js utilities)
   variablePositions: Map<string, PositionInfo>; // "varType::varName" -> declaration position
   pipelinePositions: Map<string, PositionInfo>; // pipelineName -> declaration position
+  testLetVariablePositions: TestLetVariablePosition[]; // test let variables with scope information
 
   // Handlebars symbols
   handlebars: HandlebarsSymbols;

@@ -133,6 +133,14 @@ export class LanguageProviders {
     const variableDefinition = this.getVariableDefinition(lineText, word, symbols.variablePositions, doc);
     if (variableDefinition) return variableDefinition;
 
+    // Test let variable definition (Handlebars {{var}})
+    const testLetDefinition = this.getTestLetVariableDefinition(text, offset, word, doc);
+    if (testLetDefinition) return testLetDefinition;
+
+    // Test JQ variable definition ($var)
+    const testJqDefinition = this.getTestJqVariableDefinition(text, offset, word, wordInfo.start, doc);
+    if (testJqDefinition) return testJqDefinition;
+
     // Handlebars definition
     const handlebarsDefinition = this.getHandlebarsDefinition(symbols.handlebars, offset, doc);
     if (handlebarsDefinition) return handlebarsDefinition;
@@ -694,5 +702,81 @@ export class LanguageProviders {
     const md = createMarkdownCodeBlock('webpipe', snippet);
 
     return { contents: { kind: MarkupKind.Markdown, value: md } };
+  }
+
+  /**
+   * Provides go-to-definition for Handlebars and JQ variables in test blocks
+   * Reuses the same context detection logic as hover
+   */
+  private getTestLetVariableDefinition(text: string, offset: number, word: string, doc: TextDocument): Location | null {
+    // Check if we're in a Handlebars context {{...}}
+    const beforeCursor = text.slice(Math.max(0, offset - 100), offset);
+    const afterCursor = text.slice(offset, Math.min(text.length, offset + 100));
+
+    const lastOpenBrace = beforeCursor.lastIndexOf('{{');
+    const lastCloseBrace = beforeCursor.lastIndexOf('}}');
+    const nextCloseBrace = afterCursor.indexOf('}}');
+
+    const inHandlebars = lastOpenBrace !== -1 && lastCloseBrace < lastOpenBrace && nextCloseBrace !== -1;
+
+    if (!inHandlebars) {
+      return null;
+    }
+
+    // Look up in symbol table with scope awareness
+    const program = this.cache.getProgram(doc);
+    const symbols = this.cache.getSymbols(doc);
+    const context = findTestContextAtOffset(text, offset, program.describes);
+
+    // Find the variable in the correct scope
+    for (const pos of symbols.testLetVariablePositions) {
+      if (pos.name === word) {
+        // Check if this variable is in scope
+        if (context && context.test && pos.testName === context.test.name && pos.describeName === context.describe.name) {
+          // Test-level variable in the same test
+          const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
+          return Location.create(doc.uri, range);
+        } else if (context && !pos.testName && pos.describeName === context.describe.name) {
+          // Describe-level variable in the same describe block
+          const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
+          return Location.create(doc.uri, range);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Provides go-to-definition for JQ variables ($varName) in test blocks
+   */
+  private getTestJqVariableDefinition(text: string, offset: number, word: string, wordStart: number, doc: TextDocument): Location | null {
+    // Check if we're at a JQ variable (character before word is '$')
+    if (wordStart === 0 || text[wordStart - 1] !== '$') {
+      return null;
+    }
+
+    // Look up in symbol table with scope awareness
+    const program = this.cache.getProgram(doc);
+    const symbols = this.cache.getSymbols(doc);
+    const context = findTestContextAtOffset(text, offset, program.describes);
+
+    // Find the variable in the correct scope
+    for (const pos of symbols.testLetVariablePositions) {
+      if (pos.name === word) {
+        // Check if this variable is in scope
+        if (context && context.test && pos.testName === context.test.name && pos.describeName === context.describe.name) {
+          // Test-level variable in the same test
+          const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
+          return Location.create(doc.uri, range);
+        } else if (context && !pos.testName && pos.describeName === context.describe.name) {
+          // Describe-level variable in the same describe block
+          const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
+          return Location.create(doc.uri, range);
+        }
+      }
+    }
+
+    return null;
   }
 }
