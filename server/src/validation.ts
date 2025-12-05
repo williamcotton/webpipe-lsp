@@ -4,6 +4,7 @@ import { VALID_HTTP_METHODS, KNOWN_MIDDLEWARE, KNOWN_STEPS, REGEX_PATTERNS } fro
 import { collectHandlebarsSymbols } from './symbol-collector';
 import { DocumentCache } from './document-cache';
 import { Describe } from 'webpipe-js';
+import { findTestContextAtOffset, extractHandlebarsVariables, escapeRegex } from './test-variable-utils';
 
 interface DiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
@@ -682,23 +683,6 @@ export class DocumentValidator {
   private validateTestLetVariables(text: string, push: DiagnosticPush, program?: { describes: Array<Describe> }): void {
     if (!program || !program.describes) return;
 
-    // Helper to extract Handlebars variable references from a string
-    const extractHandlebarsVariables = (str: string, baseOffset: number): Array<{ name: string; start: number; end: number }> => {
-      const regex = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g;
-      const variables: Array<{ name: string; start: number; end: number }> = [];
-      let match;
-
-      while ((match = regex.exec(str)) !== null) {
-        variables.push({
-          name: match[1],
-          start: baseOffset + match.index,
-          end: baseOffset + match.index + match[0].length
-        });
-      }
-
-      return variables;
-    };
-
     // Helper to find the offset of a substring in text after a given position
     const findOffset = (searchAfter: number, searchFor: string): number => {
       const idx = text.indexOf(searchFor, searchAfter);
@@ -710,7 +694,7 @@ export class DocumentValidator {
       if (!describe.tests) continue;
 
       // Find the describe block in the text
-      const describeRe = new RegExp(`\\bdescribe\\s+"${this.escapeRegex(describe.name || '')}"`, 'g');
+      const describeRe = new RegExp(`\\bdescribe\\s+"${escapeRegex(describe.name || '')}"`, 'g');
       const describeMatch = describeRe.exec(text);
       if (!describeMatch) continue;
 
@@ -720,7 +704,7 @@ export class DocumentValidator {
         if (!test.name) continue;
 
         // Find this specific test in the text after the describe block
-        const itRe = new RegExp(`\\bit\\s+"${this.escapeRegex(test.name)}"`, 'g');
+        const itRe = new RegExp(`\\bit\\s+"${escapeRegex(test.name)}"`, 'g');
         itRe.lastIndex = describeStart;
         const itMatch = itRe.exec(text);
         if (!itMatch) continue;
@@ -785,9 +769,5 @@ export class DocumentValidator {
         }
       }
     }
-  }
-
-  private escapeRegex(str: string): string {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 }
