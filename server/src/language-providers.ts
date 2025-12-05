@@ -81,6 +81,10 @@ export class LanguageProviders {
     const testLetHover = this.getTestLetVariableHover(text, offset, word, doc);
     if (testLetHover) return testLetHover;
 
+    // Test JQ variable hover (check for $variable in test blocks)
+    const testJqHover = this.getTestJqVariableHover(text, offset, word, wordInfo.start, doc);
+    if (testJqHover) return testJqHover;
+
     // Pipeline hover
     if (this.isPipelineContext(lineText)) {
       const md = this.formatPipelineHover(text, word, symbols);
@@ -616,6 +620,48 @@ export class LanguageProviders {
 
     // We're inside {{...}} if the last {{ comes after the last }}
     if (lastOpenBrace === -1 || lastCloseBrace > lastOpenBrace || nextCloseBrace === -1) {
+      return null;
+    }
+
+    // Get the program to access test structures
+    const program = this.cache.getProgram(doc);
+    if (!program || !program.describes) {
+      return null;
+    }
+
+    // Find the test context at the current offset
+    const testContext = findTestContextAtOffset(text, offset, program.describes);
+    if (!testContext) {
+      return null;
+    }
+
+    // Get the let variable value
+    const varInfo = getLetVariableValue(word, testContext);
+    if (!varInfo) {
+      return null;
+    }
+
+    // Format the hover message using the stored format to show exact original syntax
+    const formattedValue = varInfo.format === 'quoted'
+      ? `"${varInfo.value}"`
+      : varInfo.format === 'backtick'
+      ? `\`${varInfo.value}\``
+      : varInfo.value;
+
+    const snippet = `let ${word} = ${formattedValue}`;
+    const md = createMarkdownCodeBlock('webpipe', snippet);
+
+    return { contents: { kind: MarkupKind.Markdown, value: md } };
+  }
+
+  /**
+   * Provides hover for JQ variables ($varName) in test blocks
+   * by showing their let variable definitions.
+   */
+  private getTestJqVariableHover(text: string, offset: number, word: string, wordStart: number, doc: TextDocument): Hover | null {
+    // Check if we're at a JQ variable ($varName)
+    // The character before the word should be '$'
+    if (wordStart === 0 || text[wordStart - 1] !== '$') {
       return null;
     }
 

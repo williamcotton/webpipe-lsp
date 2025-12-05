@@ -4,7 +4,7 @@ import { VALID_HTTP_METHODS, KNOWN_MIDDLEWARE, KNOWN_STEPS, REGEX_PATTERNS } fro
 import { collectHandlebarsSymbols } from './symbol-collector';
 import { DocumentCache } from './document-cache';
 import { Describe } from 'webpipe-js';
-import { findTestContextAtOffset, extractHandlebarsVariables, escapeRegex } from './test-variable-utils';
+import { findTestContextAtOffset, extractHandlebarsVariables, extractJqVariables, escapeRegex } from './test-variable-utils';
 
 interface DiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
@@ -731,9 +731,23 @@ export class DocumentValidator {
           if (!str) return;
 
           const offset = findOffset(searchAfter, str.substring(0, Math.min(50, str.length)));
-          const vars = extractHandlebarsVariables(str, offset);
 
-          for (const v of vars) {
+          // Check Handlebars variables {{varName}}
+          const handlebarsVars = extractHandlebarsVariables(str, offset);
+          for (const v of handlebarsVars) {
+            if (!definedVariables.has(v.name)) {
+              push(
+                DiagnosticSeverity.Error,
+                v.start,
+                v.end,
+                `Variable '${v.name}' is not defined in this test block`
+              );
+            }
+          }
+
+          // Check JQ variables $varName
+          const jqVars = extractJqVariables(str, offset);
+          for (const v of jqVars) {
             if (!definedVariables.has(v.name)) {
               push(
                 DiagnosticSeverity.Error,

@@ -42,6 +42,29 @@ export function extractHandlebarsVariables(
 }
 
 /**
+ * Helper to extract JQ variable references from a string
+ * Matches $variableName in JQ expressions
+ */
+export function extractJqVariables(
+  str: string,
+  baseOffset: number
+): Array<{ name: string; start: number; end: number }> {
+  const regex = /\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
+  const variables: Array<{ name: string; start: number; end: number }> = [];
+  let match;
+
+  while ((match = regex.exec(str)) !== null) {
+    variables.push({
+      name: match[1],
+      start: baseOffset + match.index,
+      end: baseOffset + match.index + match[0].length
+    });
+  }
+
+  return variables;
+}
+
+/**
  * Find the test context at a given offset in the text
  * Returns the test, describe, and available variables at that location
  */
