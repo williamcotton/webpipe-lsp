@@ -1,7 +1,7 @@
 import { Program, TestLetVariable } from 'webpipe-js';
 import { getVariableRanges, getPipelineRanges, getTestLetVariables } from 'webpipe-js';
 import { SymbolTable, PositionInfo, TestLetVariablePosition } from './types';
-import { collectReferencePositions, collectHandlebarsSymbols, collectTestLetVariableReferences } from './symbol-collector';
+import { collectReferencesFromAST, collectHandlebarsSymbols, collectTestLetVariableReferences } from './symbol-collector';
 
 /**
  * Builds a complete symbol table from the parsed AST and source text.
@@ -48,8 +48,8 @@ export function buildSymbolTable(program: Program, text: string): SymbolTable {
     length: v.end - v.start
   }));
 
-  // Get reference positions (still using regex for now, but centralized)
-  const { variableRefs, pipelineRefs } = collectReferencePositions(text);
+  // Get reference positions using AST traversal (no more regex!)
+  const { variableRefs, pipelineRefs } = collectReferencesFromAST(program);
 
   // Get test let variable references (scope-aware)
   const testLetVariableRefs = collectTestLetVariableReferences(text, program);

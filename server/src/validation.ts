@@ -60,7 +60,7 @@ export class DocumentValidator {
       }
 
       const { variablesByType, pipelineNames } = this.collectDeclarations(text, push, program);
-      const routePatterns = this.validateRoutes(text, push);
+      const routePatterns = this.validateRoutes(text, push, program);
       
       this.validateStepReferences(text, variablesByType, push);
       this.validatePipelineReferences(text, pipelineNames, push);
@@ -69,8 +69,8 @@ export class DocumentValidator {
       this.validateRouteReferences(text, routePatterns, push);
       this.validateJsonBlocks(text, push);
       this.validateMiddlewareReferences(text, push);
-      this.validateConfigBlocks(text, push);
-      this.validateUnknownVariableTypes(text, push);
+      this.validateConfigBlocks(text, push, program);
+      this.validateUnknownVariableTypes(text, push, program);
       this.validateAuthFlows(text, push);
       this.validateResultBlocks(text, push);
       this.validateAssertions(text, push);
@@ -84,104 +84,105 @@ export class DocumentValidator {
     }
   }
 
-  private validateUnknownVariableTypes(text: string, push: DiagnosticPush): void {
-    const varDeclRe = new RegExp(REGEX_PATTERNS.VAR_DECL.source, REGEX_PATTERNS.VAR_DECL.flags);
-    for (let m; (m = varDeclRe.exec(text)); ) {
-      const varType = m[2];
-      if (varType === 'let') continue;
+  private validateUnknownVariableTypes(text: string, push: DiagnosticPush, program?: { variables: Array<{ varType: string; name: string; start: number; end: number }> }): void {
+    if (!program) return;
+
+    // Use AST to check for unknown variable types
+    for (const variable of program.variables) {
+      const varType = variable.varType;
       if (!KNOWN_MIDDLEWARE.has(varType)) {
-        const typeStart = m.index + m[0].indexOf(varType);
+        // Calculate the position of the varType within the variable declaration
+        // The varType comes before the name in the declaration
         push(
           DiagnosticSeverity.Warning,
-          typeStart,
-          typeStart + varType.length,
+          variable.start,
+          variable.start + varType.length,
           `Unknown variable type '${varType}'. If this is custom middleware, ignore.`
         );
       }
     }
   }
 
-  private validateConfigBlocks(text: string, push: DiagnosticPush): void {
-    const configRe = /(^|\n)\s*config\s+([A-Za-z_][\w-]*)\s*\{/g;
-    for (let m; (m = configRe.exec(text)); ) {
-      const name = m[2];
+  private validateConfigBlocks(text: string, push: DiagnosticPush, program?: { configs: Array<{ name: string; start: number; end: number }> }): void {
+    if (!program) return;
+
+    // Use AST to validate config blocks
+    for (const config of program.configs) {
+      const name = config.name;
       if (!KNOWN_MIDDLEWARE.has(name)) {
-        const nameStart = m.index + m[0].lastIndexOf(name);
+        // Calculate position of the name within the config declaration
         push(
           DiagnosticSeverity.Error,
-          nameStart,
-          nameStart + name.length,
+          config.start + 'config '.length,
+          config.start + 'config '.length + name.length,
           `Unknown middleware in config: ${name}`
         );
       }
     }
   }
 
-  private collectDeclarations(text: string, push: DiagnosticPush, program?: { variables: Array<{ varType: string; name: string }>; pipelines: Array<{ name: string }> }): {
+  private collectDeclarations(text: string, push: DiagnosticPush, program?: { variables: Array<{ varType: string; name: string; start: number; end: number }>; pipelines: Array<{ name: string; start: number; end: number }> }): {
     variablesByType: Map<string, Set<string>>;
     pipelineNames: Set<string>;
   } {
-    // Prefer AST to build declarations
     const variablesByType = new Map<string, Set<string>>();
     const pipelineNames = new Set<string>();
 
-    if (program) {
-      for (const v of program.variables) {
-        if (!variablesByType.has(v.varType)) variablesByType.set(v.varType, new Set());
-        variablesByType.get(v.varType)!.add(v.name);
-      }
-      for (const p of program.pipelines) {
-        pipelineNames.add(p.name);
-      }
-    }
+    if (!program) return { variablesByType, pipelineNames };
 
-    // Use regex only to locate duplicates precisely for diagnostics
-    const varDeclRe = new RegExp(REGEX_PATTERNS.VAR_DECL.source, REGEX_PATTERNS.VAR_DECL.flags);
-    const varDeclSeen = new Set<string>();
-    for (let m; (m = varDeclRe.exec(text)); ) {
-      const varType = m[2];
-      if (varType === 'let') continue;
-      const varName = m[3];
-      const key = `${varType}::${varName}`;
+    // Use AST to build declarations and detect duplicates
+    const varDeclSeen = new Map<string, { varType: string; name: string; start: number; end: number }>();
+    for (const v of program.variables) {
+      if (!variablesByType.has(v.varType)) variablesByType.set(v.varType, new Set());
+      variablesByType.get(v.varType)!.add(v.name);
+
+      // Check for duplicates
+      const key = `${v.varType}::${v.name}`;
       if (varDeclSeen.has(key)) {
-        const nameStart = m.index + m[0].lastIndexOf(varName);
-        push(DiagnosticSeverity.Warning, nameStart, nameStart + varName.length, `Duplicate ${varType} variable: ${varName}`);
+        // This is a duplicate - report it
+        const nameStart = v.start + v.varType.length + 1; // skip "varType "
+        push(DiagnosticSeverity.Warning, nameStart, nameStart + v.name.length, `Duplicate ${v.varType} variable: ${v.name}`);
       }
-      varDeclSeen.add(key);
+      varDeclSeen.set(key, v);
     }
 
-    const pipeDeclRe = new RegExp(REGEX_PATTERNS.PIPE_DECL.source, REGEX_PATTERNS.PIPE_DECL.flags);
-    const pipelineSeen = new Set<string>();
-    for (let m; (m = pipeDeclRe.exec(text)); ) {
-      const name = m[2];
-      if (pipelineSeen.has(name)) {
-        const nameStart = m.index + m[0].lastIndexOf(name);
-        push(DiagnosticSeverity.Warning, nameStart, nameStart + name.length, `Duplicate pipeline: ${name}`);
+    const pipelineSeen = new Map<string, { name: string; start: number; end: number }>();
+    for (const p of program.pipelines) {
+      pipelineNames.add(p.name);
+
+      // Check for duplicates
+      if (pipelineSeen.has(p.name)) {
+        // This is a duplicate - report it
+        const nameStart = p.start + 'pipeline '.length;
+        push(DiagnosticSeverity.Warning, nameStart, nameStart + p.name.length, `Duplicate pipeline: ${p.name}`);
       }
-      pipelineSeen.add(name);
+      pipelineSeen.set(p.name, p);
     }
 
     return { variablesByType, pipelineNames };
   }
 
-  private validateRoutes(text: string, push: DiagnosticPush): Array<{ method: string; path: string; regex: RegExp }> {
-    const routeDeclRe = new RegExp(REGEX_PATTERNS.ROUTE_DECL.source, REGEX_PATTERNS.ROUTE_DECL.flags);
-    const routes = new Set<string>();
+  private validateRoutes(text: string, push: DiagnosticPush, program?: { routes: Array<{ method: string; path: string; start: number; end: number }> }): Array<{ method: string; path: string; regex: RegExp }> {
     const routePatterns: Array<{ method: string; path: string; regex: RegExp }> = [];
-    
-    for (let m; (m = routeDeclRe.exec(text)); ) {
-      const method = m[2];
-      const path = (m[3] || '').trim();
-      
+
+    if (!program) return routePatterns;
+
+    // Use AST to validate routes
+    const routes = new Set<string>();
+    for (const route of program.routes) {
+      const method = route.method;
+      const path = route.path;
+
       if (!VALID_HTTP_METHODS.has(method)) {
-        const methodStart = m.index + m[0].indexOf(method);
-        push(DiagnosticSeverity.Error, methodStart, methodStart + method.length, `Unknown HTTP method: ${method}`);
+        // Method starts at route.start
+        push(DiagnosticSeverity.Error, route.start, route.start + method.length, `Unknown HTTP method: ${method}`);
         continue;
       }
-      
+
       const key = `${method} ${path}`;
       if (routes.has(key)) {
-        const pathStart = m.index + m[0].lastIndexOf(path);
+        // Path starts after method and space
+        const pathStart = route.start + method.length + 1;
         push(DiagnosticSeverity.Warning, pathStart, pathStart + path.length, `Duplicate route: ${key}`);
       }
       routes.add(key);
@@ -190,7 +191,7 @@ export class DocumentValidator {
       const pattern = '^' + path
         .replace(/[.*+?^${}()|[\]\\]/g, (ch) => `\\${ch}`)
         .replace(/:(?:[A-Za-z_][\w-]*)/g, '[^/]+') + '$';
-      
+
       try {
         routePatterns.push({ method, path, regex: new RegExp(pattern) });
       } catch (_e) {

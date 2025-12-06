@@ -7,6 +7,7 @@ import {
 import { getWordAt } from './utils';
 import { DocumentCache } from './document-cache';
 import { filterReferencesInScope } from './symbol-collector';
+import { findNodeAtOffset } from './ast-utils';
 
 export class UIProviders {
   constructor(private cache: DocumentCache) {}
@@ -214,17 +215,28 @@ export class UIProviders {
     const end = doc.offsetAt(range.end);
     const selectedText = text.slice(start, end);
 
-    // Find a good insertion point for the pipeline declaration
-    // (before the current route/pipeline/variable declaration)
-    const beforeSelection = text.slice(0, start);
-    const routeOrDeclPattern = /(^|\n)((?:GET|POST|PUT|DELETE)\s|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=))/g;
-    let lastMatch = null;
-    let match;
-    while ((match = routeOrDeclPattern.exec(beforeSelection)) !== null) {
-      lastMatch = match;
+    // Find a good insertion point for the pipeline declaration using AST
+    // Look for the node containing the selection and insert before it
+    const program = this.cache.getProgram(doc);
+    const node = findNodeAtOffset(program, start);
+
+    let insertionOffset = 0;
+
+    // If we found a node, use its start position as the insertion point
+    if (node && 'start' in node) {
+      insertionOffset = (node as any).start;
+    } else {
+      // Fallback: find the last declaration before the selection
+      const beforeSelection = text.slice(0, start);
+      const routeOrDeclPattern = /(^|\n)((?:GET|POST|PUT|DELETE)\s|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=))/g;
+      let lastMatch = null;
+      let match;
+      while ((match = routeOrDeclPattern.exec(beforeSelection)) !== null) {
+        lastMatch = match;
+      }
+      insertionOffset = lastMatch ? lastMatch.index : 0;
     }
 
-    const insertionOffset = lastMatch ? lastMatch.index : 0;
     const insertionPos = doc.positionAt(insertionOffset);
 
     // Create the pipeline declaration

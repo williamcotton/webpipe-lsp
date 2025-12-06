@@ -3,13 +3,14 @@ import {
   Location, Position, Hover, MarkupKind, ReferenceParams,
   HoverParams, DefinitionParams, RenameParams, WorkspaceEdit, TextEdit
 } from 'vscode-languageserver/node';
-import { Describe } from 'webpipe-js';
+import { Describe, PipelineStep } from 'webpipe-js';
 import { getWordAt, createMarkdownCodeBlock } from './utils';
 import { RangeAbs, SymbolTable, HandlebarsSymbols } from './types';
 import { getMiddlewareDoc, formatMiddlewareHover } from './middleware-docs';
 import { getConfigDoc, formatConfigHover } from './config-docs';
 import { DocumentCache } from './document-cache';
 import { findTestContextAtOffset, findDescribeBlockRange, getLetVariableValue } from './test-variable-utils';
+import { findNodeAtOffset, ASTNode } from './ast-utils';
 
 /**
  * Language providers for hover, definition, and references.
@@ -17,6 +18,48 @@ import { findTestContextAtOffset, findDescribeBlockRange, getLetVariableValue } 
  */
 export class LanguageProviders {
   constructor(private cache: DocumentCache) {}
+
+  /**
+   * Get AST-based context information at a given offset
+   * This provides more accurate context than regex-based line parsing
+   */
+  private getASTContext(offset: number, doc: TextDocument): {
+    node: ASTNode | null;
+    kind: 'variable' | 'pipeline' | 'config' | 'route' | 'step' | 'test' | 'mock' | 'unknown';
+    varType?: string;
+  } {
+    const program = this.cache.getProgram(doc);
+    const node = findNodeAtOffset(program, offset);
+
+    if (!node) {
+      return { node: null, kind: 'unknown' };
+    }
+
+    // Determine the kind of node
+    if ('varType' in node && 'name' in node && 'value' in node) {
+      return { node, kind: 'variable', varType: (node as any).varType };
+    }
+    if ('name' in node && 'pipeline' in node && !('varType' in node)) {
+      return { node, kind: 'pipeline' };
+    }
+    if ('name' in node && 'properties' in node) {
+      return { node, kind: 'config' };
+    }
+    if ('method' in node && 'path' in node) {
+      return { node, kind: 'route' };
+    }
+    if ('kind' in node && (node as any).kind === 'Regular') {
+      return { node, kind: 'step', varType: (node as any).name };
+    }
+    if ('when' in node && 'conditions' in node) {
+      return { node, kind: 'test' };
+    }
+    if ('target' in node && 'returnValue' in node) {
+      return { node, kind: 'mock' };
+    }
+
+    return { node, kind: 'unknown' };
+  }
 
   onReferences(params: ReferenceParams, doc: TextDocument): Location[] | null {
     const text = this.cache.getText(doc);
@@ -283,6 +326,28 @@ export class LanguageProviders {
            /^\s*when\s+executing\s+pipeline\s+/.test(lineText) ||
            /^\s*(with|and)\s+mock\s+pipeline\s+/.test(lineText) ||
            /^\s*pipeline\s+[A-Za-z_][\w-]*\s*=/.test(lineText);
+  }
+
+  /**
+   * AST-based version of isPipelineContext
+   * This is more accurate than regex-based detection and can be used to replace isPipelineContext
+   */
+  private isPipelineContextAST(offset: number, doc: TextDocument): boolean {
+    const context = this.getASTContext(offset, doc);
+
+    // Check if we're in a pipeline-related node
+    if (context.kind === 'pipeline') return true;
+
+    // Check if we're in a pipeline step that references another pipeline
+    if (context.kind === 'step' && context.varType === 'pipeline') return true;
+
+    // Check if we're in a mock that mocks a pipeline
+    if (context.kind === 'mock') {
+      const mockNode = context.node as any;
+      if (mockNode.target && mockNode.target.startsWith('pipeline ')) return true;
+    }
+
+    return false;
   }
 
   private getVariableKey(lineText: string, word: string): string | null {

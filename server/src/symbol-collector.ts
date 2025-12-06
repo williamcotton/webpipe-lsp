@@ -369,3 +369,126 @@ export function filterReferencesInScope(
     return true;
   });
 }
+
+/**
+ * AST-based reference collection (replacement for regex-based collectReferencePositions)
+ * Uses the parsed AST to find all variable and pipeline references
+ */
+export function collectReferencesFromAST(program: Program): ReferencePositions {
+  const variableRefs = new Map<string, Array<{ start: number; length: number }>>();
+  const pipelineRefs = new Map<string, Array<{ start: number; length: number }>>();
+
+  const pushVar = (varType: string, varName: string, start: number, length: number) => {
+    const key = `${varType}::${varName}`;
+    if (!variableRefs.has(key)) variableRefs.set(key, []);
+    variableRefs.get(key)!.push({ start, length });
+  };
+
+  const pushPipe = (name: string, start: number, length: number) => {
+    if (!pipelineRefs.has(name)) pipelineRefs.set(name, []);
+    pipelineRefs.get(name)!.push({ start, length });
+  };
+
+  // Helper to walk through all pipelines
+  function* walkPipeline(pipeline: any): any {
+    if (!pipeline || !pipeline.steps) return;
+    for (const step of pipeline.steps) {
+      yield step;
+      // Recurse into nested pipelines
+      if (step.kind === 'If') {
+        yield* walkPipeline(step.condition);
+        yield* walkPipeline(step.thenBranch);
+        if (step.elseBranch) yield* walkPipeline(step.elseBranch);
+      } else if (step.kind === 'Dispatch') {
+        for (const branch of step.branches) yield* walkPipeline(branch.pipeline);
+        if (step.default) yield* walkPipeline(step.default);
+      } else if (step.kind === 'Foreach') {
+        yield* walkPipeline(step.pipeline);
+      } else if (step.kind === 'Result') {
+        for (const branch of step.branches) yield* walkPipeline(branch.pipeline);
+      }
+    }
+  }
+
+  // Collect variable references from pipeline steps
+  const processPipeline = (pipeline: any) => {
+    for (const step of walkPipeline(pipeline)) {
+      if (step.kind === 'Regular' && step.configType === 'identifier') {
+        const varName = step.config;
+        const stepName = step.name;
+
+        // Calculate name offset within the step
+        // This is approximate - we know the step starts at step.start
+        // For now, use the start of the step as the reference position
+        // TODO: The parser should ideally provide separate position for the config value
+        pushVar(stepName, varName, step.start, varName.length);
+      }
+    }
+  };
+
+  // Process routes
+  for (const route of program.routes) {
+    if (route.pipeline.kind === 'Named') {
+      // Named pipeline reference
+      pushPipe(route.pipeline.name, route.pipeline.start, route.pipeline.name.length);
+    } else if (route.pipeline.kind === 'Inline') {
+      // Inline pipeline
+      processPipeline(route.pipeline.pipeline);
+    }
+  }
+
+  // Process named pipelines
+  for (const namedPipeline of program.pipelines) {
+    processPipeline(namedPipeline.pipeline);
+  }
+
+  // Process GraphQL resolvers
+  for (const query of program.queries) {
+    processPipeline(query.pipeline);
+  }
+  for (const mutation of program.mutations) {
+    processPipeline(mutation.pipeline);
+  }
+
+  // Process feature flags
+  if (program.featureFlags) {
+    processPipeline(program.featureFlags);
+  }
+
+  // Process test describe blocks
+  for (const describe of program.describes) {
+    for (const test of describe.tests) {
+      // Check when clauses
+      const when = test.when;
+      if (when.kind === 'ExecutingPipeline') {
+        pushPipe(when.name, when.start, when.name.length);
+      } else if (when.kind === 'ExecutingVariable') {
+        pushVar(when.varType, when.name, when.start, when.name.length);
+      }
+
+      // Check mocks (both describe-level and test-level)
+      const allMocks = [...describe.mocks, ...test.mocks];
+      for (const mock of allMocks) {
+        // Parse mock target
+        if (mock.target.includes('.')) {
+          const [type, name] = mock.target.split('.');
+          if (type === 'query' || type === 'mutation') {
+            // GraphQL mock - not a variable reference
+            continue;
+          } else {
+            // Variable mock: type.name
+            pushVar(type, name, mock.start, name.length);
+          }
+        } else {
+          // Could be a pipeline reference
+          if (mock.target.startsWith('pipeline ')) {
+            const pipelineName = mock.target.substring('pipeline '.length);
+            pushPipe(pipelineName, mock.start, pipelineName.length);
+          }
+        }
+      }
+    }
+  }
+
+  return { variableRefs, pipelineRefs };
+}
