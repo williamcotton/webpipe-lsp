@@ -680,9 +680,9 @@ export class LanguageProviders {
 
         // Only update if this is a smaller (more specific) range
         if (rangeSize < smallestRange && describe.variables) {
-          for (const [name, value, format] of describe.variables) {
-            if (name === word) {
-              bestMatch = { describe, value, format };
+          for (const variable of describe.variables) {
+            if (variable.name === word) {
+              bestMatch = { describe, value: variable.value, format: variable.format };
               smallestRange = rangeSize;
               break;
             }
@@ -765,9 +765,9 @@ export class LanguageProviders {
 
         // Only update if this is a smaller (more specific) range
         if (rangeSize < smallestRange && describe.variables) {
-          for (const [name, value, format] of describe.variables) {
-            if (name === word) {
-              bestMatch = { describe, value, format };
+          for (const variable of describe.variables) {
+            if (variable.name === word) {
+              bestMatch = { describe, value: variable.value, format: variable.format };
               smallestRange = rangeSize;
               break;
             }

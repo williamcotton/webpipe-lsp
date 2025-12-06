@@ -68,37 +68,23 @@ export function extractJqVariables(
  * Finds which describe block contains the given offset.
  * Returns the describe AST node and its text range.
  *
- * Strategy: Build all ranges first, then find the best match.
- * This ensures we get the most specific (smallest) range if multiple match.
+ * Uses the AST's built-in start/end positions - no regex needed!
  */
 export function findDescribeAtOffset(
   text: string,
   offset: number,
   describes: Describe[]
 ): { describe: Describe; start: number; end: number } | null {
-  // Build ranges for all describes
-  const rangesWithDescribe: Array<{ describe: Describe; start: number; end: number }> = [];
-
-  for (const describe of describes) {
-    const range = findDescribeBlockRange(text, describe);
-    if (range) {
-      rangesWithDescribe.push({ describe, start: range.start, end: range.end });
-    }
-  }
-
-  // Sort by start position to ensure we process in document order
-  rangesWithDescribe.sort((a, b) => a.start - b.start);
-
   // Find the describe that contains this offset
-  // If multiple match (overlapping ranges), take the smallest (most specific)
+  // If multiple match (nested describes), take the smallest (most specific)
   let bestMatch: { describe: Describe; start: number; end: number } | null = null;
   let smallestSize = Infinity;
 
-  for (const item of rangesWithDescribe) {
-    if (offset >= item.start && offset < item.end) {
-      const size = item.end - item.start;
+  for (const describe of describes) {
+    if (offset >= describe.start && offset < describe.end) {
+      const size = describe.end - describe.start;
       if (size < smallestSize) {
-        bestMatch = item;
+        bestMatch = { describe, start: describe.start, end: describe.end };
         smallestSize = size;
       }
     }
@@ -110,6 +96,8 @@ export function findDescribeAtOffset(
 /**
  * Find the test context at a given offset in the text
  * Returns the test, describe, and available variables at that location
+ *
+ * Uses the AST's built-in start/end positions - no regex needed!
  */
 export function findTestContextAtOffset(
   text: string,
@@ -119,55 +107,34 @@ export function findTestContextAtOffset(
   for (const describe of describes) {
     if (!describe.tests) continue;
 
-    // Find the describe block range
-    const describeRange = findDescribeBlockRange(text, describe);
-    if (!describeRange) continue;
-
-    const describeStart = describeRange.start;
-    const describeEnd = describeRange.end;
+    // Check if offset is within this describe block
+    if (offset < describe.start || offset >= describe.end) continue;
 
     for (const test of describe.tests) {
-      if (!test.name) continue;
-
-      // Find this specific test in the text after the describe block
-      const itRe = new RegExp(`\\bit\\s+"${escapeRegex(test.name)}"`, 'g');
-      itRe.lastIndex = describeStart;
-      const itMatch = itRe.exec(text);
-      if (!itMatch) continue;
-
-      const testStart = itMatch.index;
-
-      // Find the end of this test (next test or end of describe block)
-      const nextTestRe = /\n\s*it\s+"/g;
-      nextTestRe.lastIndex = testStart + 1;
-      const nextTestMatch = nextTestRe.exec(text);
-      // Only use nextTestMatch if it's within the current describe block
-      const testEnd = (nextTestMatch && nextTestMatch.index < describeEnd) ? nextTestMatch.index : describeEnd;
-
-      // Check if our offset is within this test
-      if (offset >= testStart && offset < testEnd) {
+      // Check if our offset is within this test using AST positions
+      if (offset >= test.start && offset < test.end) {
         // Collect available variables
         const definedVariables = new Set<string>();
 
         // Add describe-level variables
         if (describe.variables) {
-          for (const [name] of describe.variables) {
-            definedVariables.add(name);
+          for (const variable of describe.variables) {
+            definedVariables.add(variable.name);
           }
         }
 
         // Add test-level variables (override describe-level)
         if (test.variables) {
-          for (const [name] of test.variables) {
-            definedVariables.add(name);
+          for (const variable of test.variables) {
+            definedVariables.add(variable.name);
           }
         }
 
         return {
           describe,
           test,
-          testStart,
-          testEnd,
+          testStart: test.start,
+          testEnd: test.end,
           definedVariables
         };
       }
@@ -187,18 +154,18 @@ export function getLetVariableValue(
 ): { value: string; format: 'quoted' | 'backtick' | 'bare'; source: 'test' | 'describe' } | null {
   // Check test-level variables first (they override describe-level)
   if (context.test.variables) {
-    for (const [name, value, format] of context.test.variables) {
-      if (name === varName) {
-        return { value, format, source: 'test' };
+    for (const variable of context.test.variables) {
+      if (variable.name === varName) {
+        return { value: variable.value, format: variable.format, source: 'test' };
       }
     }
   }
 
   // Then check describe-level variables
   if (context.describe.variables) {
-    for (const [name, value, format] of context.describe.variables) {
-      if (name === varName) {
-        return { value, format, source: 'describe' };
+    for (const variable of context.describe.variables) {
+      if (variable.name === varName) {
+        return { value: variable.value, format: variable.format, source: 'describe' };
       }
     }
   }
@@ -207,67 +174,34 @@ export function getLetVariableValue(
 }
 
 /**
+ * @deprecated Use describe.start and describe.end from the AST directly
+ *
  * Find the text range of a describe block.
- * Uses a more robust approach: find ALL describe statements first,
- * then determine ranges based on their positions.
+ * This function is kept for backward compatibility but is no longer needed
+ * since the AST now includes position information.
  */
 export function findDescribeBlockRange(
   text: string,
   describe: Describe
 ): { start: number; end: number } | null {
-  // Find all describe statements in the text
-  const allDescribes: Array<{ name: string; start: number }> = [];
-  const describePattern = /\bdescribe\s+"([^"]+)"/g;
-  let match;
-
-  while ((match = describePattern.exec(text)) !== null) {
-    allDescribes.push({
-      name: match[1],
-      start: match.index
-    });
-  }
-
-  // Sort by position
-  allDescribes.sort((a, b) => a.start - b.start);
-
-  // Find our describe in the list
-  const targetIndex = allDescribes.findIndex(d => d.name === describe.name);
-  if (targetIndex === -1) return null;
-
-  const describeStart = allDescribes[targetIndex].start;
-
-  // End is either the start of the next describe, or EOF
-  const describeEnd = targetIndex < allDescribes.length - 1
-    ? allDescribes[targetIndex + 1].start
-    : text.length;
-
-  return { start: describeStart, end: describeEnd };
+  // Just return the AST's built-in positions
+  return { start: describe.start, end: describe.end };
 }
 
 /**
- * Find the text range of a test block within a describe
+ * @deprecated Use test.start and test.end from the AST directly
+ *
+ * Find the text range of a test block within a describe.
+ * This function is kept for backward compatibility but is no longer needed
+ * since the AST now includes position information.
  */
 export function findTestBlockRange(
   text: string,
   describeStart: number,
   test: Describe['tests'][0]
 ): { start: number; end: number } | null {
-  if (!test.name) return null;
-
-  const itRe = new RegExp(`\\bit\\s+"${escapeRegex(test.name)}"`, 'g');
-  itRe.lastIndex = describeStart;
-  const itMatch = itRe.exec(text);
-  if (!itMatch) return null;
-
-  const testStart = itMatch.index;
-
-  // Find the end of this test (next test or end of describe)
-  const nextTestRe = /\n\s*it\s+"/g;
-  nextTestRe.lastIndex = testStart + 1;
-  const nextTestMatch = nextTestRe.exec(text);
-  const testEnd = nextTestMatch ? nextTestMatch.index : text.length;
-
-  return { start: testStart, end: testEnd };
+  // Just return the AST's built-in positions
+  return { start: test.start, end: test.end };
 }
 
 /**

@@ -245,23 +245,21 @@ export function collectTestLetVariableReferences(
 
   // Process each describe block
   for (const describe of program.describes) {
-    const describeRange = findDescribeBlockRange(text, describe);
-    if (!describeRange) continue;
-
-    const describeText = text.substring(describeRange.start, describeRange.end);
+    // Use AST's built-in positions
+    const describeText = text.substring(describe.start, describe.end);
 
     // Collect describe-level let variables
     const describeVars = new Set<string>();
     if (describe.variables) {
-      for (const [name] of describe.variables) {
-        describeVars.add(name);
+      for (const variable of describe.variables) {
+        describeVars.add(variable.name);
       }
     }
 
     // Search for describe-level variable references within the entire describe block
     for (const varName of describeVars) {
       // Handlebars {{varName}}
-      const handlebarsVars = extractHandlebarsVariables(describeText, describeRange.start);
+      const handlebarsVars = extractHandlebarsVariables(describeText, describe.start);
       for (const v of handlebarsVars) {
         if (v.name === varName) {
           addRef(varName, v.start, v.end - v.start);
@@ -269,7 +267,7 @@ export function collectTestLetVariableReferences(
       }
 
       // JQ $varName (excluding GraphQL contexts)
-      const jqVars = extractJqVariablesExcludingGraphQL(describeText, describeRange.start);
+      const jqVars = extractJqVariablesExcludingGraphQL(describeText, describe.start);
       for (const v of jqVars) {
         if (v.name === varName) {
           addRef(varName, v.start, v.end - v.start);
@@ -280,28 +278,26 @@ export function collectTestLetVariableReferences(
     // Process each test block for test-level variables
     if (describe.tests) {
       for (const test of describe.tests) {
-        const testRange = findTestBlockRange(text, describeRange.start, test);
-        if (!testRange) continue;
-
-        const testText = text.substring(testRange.start, testRange.end);
+        // Use AST's built-in positions
+        const testText = text.substring(test.start, test.end);
 
         // Collect test-level let variables (these override describe-level)
         if (test.variables) {
-          for (const [name] of test.variables) {
+          for (const variable of test.variables) {
             // Search only within this test's scope
             // Handlebars {{varName}}
-            const handlebarsVars = extractHandlebarsVariables(testText, testRange.start);
+            const handlebarsVars = extractHandlebarsVariables(testText, test.start);
             for (const v of handlebarsVars) {
-              if (v.name === name) {
-                addRef(name, v.start, v.end - v.start);
+              if (v.name === variable.name) {
+                addRef(variable.name, v.start, v.end - v.start);
               }
             }
 
             // JQ $varName (excluding GraphQL contexts)
-            const jqVars = extractJqVariablesExcludingGraphQL(testText, testRange.start);
+            const jqVars = extractJqVariablesExcludingGraphQL(testText, test.start);
             for (const v of jqVars) {
-              if (v.name === name) {
-                addRef(name, v.start, v.end - v.start);
+              if (v.name === variable.name) {
+                addRef(variable.name, v.start, v.end - v.start);
               }
             }
           }
@@ -315,7 +311,7 @@ export function collectTestLetVariableReferences(
 
 /**
  * Filters references to only include those that are in scope for a given test let variable.
- * Uses positional matching against describe/test block ranges from the AST.
+ * Uses AST's built-in position data - no regex needed!
  *
  * Scope rules:
  * - Describe-level variables: references anywhere in the describe block (excluding tests that shadow it)
@@ -331,20 +327,14 @@ export function filterReferencesInScope(
   const describe = program.describes.find(d => d.name === varDecl.describeName);
   if (!describe) return [];
 
-  const describeRange = findDescribeBlockRange(text, describe);
-  if (!describeRange) return [];
-
   // If this is a test-level variable, only include references within that test
   if (varDecl.testName) {
     const test = describe.tests?.find(t => t.name === varDecl.testName);
     if (!test) return [];
 
-    const testRange = findTestBlockRange(text, describeRange.start, test);
-    if (!testRange) return [];
-
-    // Filter to references within the test block
+    // Filter to references within the test block using AST positions
     return allReferences.filter(ref =>
-      ref.start >= testRange.start && ref.start < testRange.end
+      ref.start >= test.start && ref.start < test.end
     );
   }
 
@@ -355,19 +345,17 @@ export function filterReferencesInScope(
   if (describe.tests) {
     for (const test of describe.tests) {
       // Check if this test has a variable with the same name (shadowing)
-      if (test.variables?.some(([name]) => name === varDecl.name)) {
-        const testRange = findTestBlockRange(text, describeRange.start, test);
-        if (testRange) {
-          shadowingTestRanges.push(testRange);
-        }
+      if (test.variables?.some(variable => variable.name === varDecl.name)) {
+        // Use AST's built-in positions
+        shadowingTestRanges.push({ start: test.start, end: test.end });
       }
     }
   }
 
   // Filter to references within describe block but outside shadowing test blocks
   return allReferences.filter(ref => {
-    // Must be within describe block
-    if (ref.start < describeRange.start || ref.start >= describeRange.end) {
+    // Must be within describe block (using AST positions)
+    if (ref.start < describe.start || ref.start >= describe.end) {
       return false;
     }
 

@@ -701,8 +701,8 @@ export class DocumentValidator {
       // Collect describe-level variables for validating describe-level mocks
       const describeVariables = new Set<string>();
       if (describe.variables) {
-        for (const [name] of describe.variables) {
-          describeVariables.add(name);
+        for (const variable of describe.variables) {
+          describeVariables.add(variable.name);
         }
       }
 
@@ -768,14 +768,14 @@ export class DocumentValidator {
         // Start with describe-level variables
         const definedVariables = new Set<string>();
         if (describe.variables) {
-          for (const [name] of describe.variables) {
-            definedVariables.add(name);
+          for (const variable of describe.variables) {
+            definedVariables.add(variable.name);
           }
         }
         // Test-level variables override describe-level
         if (test.variables) {
-          for (const [name] of test.variables) {
-            definedVariables.add(name);
+          for (const variable of test.variables) {
+            definedVariables.add(variable.name);
           }
         }
 
