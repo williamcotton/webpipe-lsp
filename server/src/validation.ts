@@ -75,7 +75,7 @@ export class DocumentValidator {
       this.validateResultBlocks(text, push);
       this.validateAssertions(text, push);
       this.validateUnknownSteps(text, push);
-      this.validateHandlebarsPartialReferences(text, push);
+      this.validateHandlebarsPartialReferences(text, push, program);
       this.validateJoinAsyncReferences(text, push);
       this.validateTestLetVariables(text, push, program);
 
@@ -572,8 +572,9 @@ export class DocumentValidator {
     }
   }
 
-  private validateHandlebarsPartialReferences(text: string, push: DiagnosticPush): void {
-    const hb = collectHandlebarsSymbols(text);
+  private validateHandlebarsPartialReferences(text: string, push: DiagnosticPush, program?: any): void {
+    if (!program) return;
+    const hb = collectHandlebarsSymbols(text, program);
     for (const [name, uses] of hb.usagesByName.entries()) {
       const hasGlobalDecl = hb.declByName.has(name);
       // Any inline decl anywhere in the file (best-effort since scope can cross into called partials)

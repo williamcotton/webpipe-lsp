@@ -52,7 +52,7 @@ export class CompletionProvider {
     if (routeCompletion) return routeCompletion;
 
     // Handlebars partial completion inside template content
-    const handlebarsCompletion = this.getHandlebarsPartialCompletion(linePrefix, text, doc, offset, startOfLine);
+    const handlebarsCompletion = this.getHandlebarsPartialCompletion(linePrefix, text, doc, offset, startOfLine, program);
     if (handlebarsCompletion) return handlebarsCompletion;
 
     return [];
@@ -268,9 +268,10 @@ export class CompletionProvider {
     fullText: string,
     doc: TextDocument,
     offset: number,
-    startOfLine: number
+    startOfLine: number,
+    program: any
   ): CompletionItem[] | null {
-    const hb = collectHandlebarsSymbols(fullText);
+    const hb = collectHandlebarsSymbols(fullText, program);
     const withinContent = hb.contentRanges.some((r: { start: number; end: number }) => offset >= r.start && offset <= r.end);
     if (!withinContent) return null;
 

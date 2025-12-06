@@ -1,39 +1,10 @@
-import { REGEX_PATTERNS } from './constants';
-import { VariablesByType, DeclarationPositions, ReferencePositions, RangeAbs, HandlebarsSymbols } from './types';
-import { extractHandlebarsVariables, extractJqVariablesExcludingGraphQL, findDescribeBlockRange, findTestBlockRange } from './test-variable-utils';
+import { ReferencePositions, RangeAbs, HandlebarsSymbols } from './types';
+import { extractHandlebarsVariables, extractJqVariablesExcludingGraphQL } from './test-variable-utils';
 import { Program } from 'webpipe-js';
-
-/**
- * DEPRECATED: This function has been replaced by collectDeclarationPositionsFromAST
- * which uses the AST from webpipe-js instead of regex parsing.
- * Kept for backward compatibility with collectHandlebarsSymbols.
- */
-export function collectDeclarationPositions(text: string): DeclarationPositions {
-  const variablePositions = new Map<string, { start: number; length: number }>();
-  const varDeclRe = new RegExp(REGEX_PATTERNS.VAR_DECL.source, REGEX_PATTERNS.VAR_DECL.flags);
-
-  for (let m; (m = varDeclRe.exec(text)); ) {
-    const varType = m[2];
-    const varName = m[3];
-    const nameStart = m.index + m[0].lastIndexOf(varName);
-    variablePositions.set(`${varType}::${varName}`, { start: nameStart, length: varName.length });
-  }
-
-  const pipelinePositions = new Map<string, { start: number; length: number }>();
-  const pipeDeclRe = new RegExp(REGEX_PATTERNS.PIPE_DECL.source, REGEX_PATTERNS.PIPE_DECL.flags);
-
-  for (let m; (m = pipeDeclRe.exec(text)); ) {
-    const name = m[2];
-    const nameStart = m.index + m[0].lastIndexOf(name);
-    pipelinePositions.set(name, { start: nameStart, length: name.length });
-  }
-
-  return { variablePositions, pipelinePositions };
-}
 
 function collectHandlebarsContentRanges(text: string): RangeAbs[] {
   const ranges: RangeAbs[] = [];
-  
+
   // Variable declarations: handlebars <name> = `...`
   const varRe = /(^|\n)\s*handlebars\s+([A-Za-z_][\w-]*)\s*=\s*`([\s\S]*?)`/g;
   for (let m; (m = varRe.exec(text)); ) {
@@ -45,7 +16,7 @@ function collectHandlebarsContentRanges(text: string): RangeAbs[] {
       ranges.push({ start: contentStart, end: contentStart + content.length });
     }
   }
-  
+
   // Inline step content: |> handlebars: `...`
   const stepRe = /(^|\n)\s*\|>\s*handlebars\s*:\s*`([\s\S]*?)`/g;
   for (let m; (m = stepRe.exec(text)); ) {
@@ -57,18 +28,24 @@ function collectHandlebarsContentRanges(text: string): RangeAbs[] {
       ranges.push({ start: contentStart, end: contentStart + content.length });
     }
   }
-  
+
   return ranges;
 }
 
-export function collectHandlebarsSymbols(text: string): HandlebarsSymbols {
+/**
+ * Collects Handlebars partial symbols using AST-based variable declarations
+ */
+export function collectHandlebarsSymbols(text: string, program: Program): HandlebarsSymbols {
   const declByName = new Map<string, { nameStart: number; nameEnd: number }>();
-  const { variablePositions } = collectDeclarationPositions(text);
-  
-  for (const [key, pos] of variablePositions.entries()) {
-    if (key.startsWith('handlebars::')) {
-      const name = key.slice('handlebars::'.length);
-      declByName.set(name, { nameStart: pos.start, nameEnd: pos.start + pos.length });
+
+  // Use AST to find handlebars variable declarations
+  for (const variable of program.variables) {
+    if (variable.varType === 'handlebars') {
+      // Calculate the position of the variable name within the declaration
+      // Format: "handlebars <name> = `...`"
+      // The name starts after "handlebars "
+      const nameStart = variable.start + 'handlebars '.length;
+      declByName.set(variable.name, { nameStart, nameEnd: nameStart + variable.name.length });
     }
   }
 
@@ -226,7 +203,6 @@ export function collectTestLetVariableReferences(
 export function filterReferencesInScope(
   varDecl: { name: string; describeName: string; testName?: string; start: number },
   allReferences: Array<{ start: number; length: number }>,
-  text: string,
   program: Program
 ): Array<{ start: number; length: number }> {
   // Find the describe block this variable belongs to

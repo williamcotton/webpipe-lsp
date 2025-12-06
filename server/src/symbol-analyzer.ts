@@ -54,8 +54,8 @@ export function buildSymbolTable(program: Program, text: string): SymbolTable {
   // Get test let variable references (scope-aware)
   const testLetVariableRefs = collectTestLetVariableReferences(text, program);
 
-  // Get handlebars symbols
-  const handlebars = collectHandlebarsSymbols(text);
+  // Get handlebars symbols (AST-based)
+  const handlebars = collectHandlebarsSymbols(text, program);
 
   return {
     variables,

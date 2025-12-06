@@ -54,8 +54,8 @@ export class UIProviders {
       // Get all references for this variable name
       const allRefs = symbols.testLetVariableRefs.get(pos.name) || [];
 
-      // Filter to only references in scope using positional matching
-      const scopedRefs = filterReferencesInScope(pos, allRefs, text, program);
+      // Filter to only references in scope using AST positions
+      const scopedRefs = filterReferencesInScope(pos, allRefs, program);
 
       const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
       const locations = scopedRefs.map(r => Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
