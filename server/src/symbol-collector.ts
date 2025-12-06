@@ -3,31 +3,15 @@ import { VariablesByType, DeclarationPositions, ReferencePositions, RangeAbs, Ha
 import { extractHandlebarsVariables, extractJqVariablesExcludingGraphQL, findDescribeBlockRange, findTestBlockRange } from './test-variable-utils';
 import { Program } from 'webpipe-js';
 
-export function collectVariablesAndPipelines(text: string): VariablesByType {
-  const variablesByType = new Map<string, Set<string>>();
-  const varDeclRe = new RegExp(REGEX_PATTERNS.VAR_DECL.source, REGEX_PATTERNS.VAR_DECL.flags);
-  
-  for (let m; (m = varDeclRe.exec(text)); ) {
-    const varType = m[2];
-    const varName = m[3];
-    if (!variablesByType.has(varType)) variablesByType.set(varType, new Set());
-    variablesByType.get(varType)!.add(varName);
-  }
-
-  const pipeDeclRe = new RegExp(REGEX_PATTERNS.PIPE_DECL.source, REGEX_PATTERNS.PIPE_DECL.flags);
-  const pipelineNames = new Set<string>();
-  
-  for (let m; (m = pipeDeclRe.exec(text)); ) {
-    pipelineNames.add(m[2]);
-  }
-
-  return { variablesByType, pipelineNames };
-}
-
+/**
+ * DEPRECATED: This function has been replaced by collectDeclarationPositionsFromAST
+ * which uses the AST from webpipe-js instead of regex parsing.
+ * Kept for backward compatibility with collectHandlebarsSymbols.
+ */
 export function collectDeclarationPositions(text: string): DeclarationPositions {
   const variablePositions = new Map<string, { start: number; length: number }>();
   const varDeclRe = new RegExp(REGEX_PATTERNS.VAR_DECL.source, REGEX_PATTERNS.VAR_DECL.flags);
-  
+
   for (let m; (m = varDeclRe.exec(text)); ) {
     const varType = m[2];
     const varName = m[3];
@@ -37,7 +21,7 @@ export function collectDeclarationPositions(text: string): DeclarationPositions 
 
   const pipelinePositions = new Map<string, { start: number; length: number }>();
   const pipeDeclRe = new RegExp(REGEX_PATTERNS.PIPE_DECL.source, REGEX_PATTERNS.PIPE_DECL.flags);
-  
+
   for (let m; (m = pipeDeclRe.exec(text)); ) {
     const name = m[2];
     const nameStart = m.index + m[0].lastIndexOf(name);
@@ -45,84 +29,6 @@ export function collectDeclarationPositions(text: string): DeclarationPositions 
   }
 
   return { variablePositions, pipelinePositions };
-}
-
-export function collectReferencePositions(text: string): ReferencePositions {
-  const variableRefs = new Map<string, Array<{ start: number; length: number }>>();
-  const pipelineRefs = new Map<string, Array<{ start: number; length: number }>>();
-
-  const pushVar = (key: string, start: number, length: number) => {
-    if (!variableRefs.has(key)) variableRefs.set(key, []);
-    variableRefs.get(key)!.push({ start, length });
-  };
-  
-  const pushPipe = (name: string, start: number, length: number) => {
-    if (!pipelineRefs.has(name)) pipelineRefs.set(name, []);
-    pipelineRefs.get(name)!.push({ start, length });
-  };
-
-  // |> pipeline: <name>
-  const pipeRefRe = /(^|\n)(\s*\|>\s*pipeline\s*:\s*)([A-Za-z_][\w-]*)/g;
-  for (let m; (m = pipeRefRe.exec(text)); ) {
-    const name = m[3];
-    const prefixLen = (m[1] ? m[1].length : 0) + m[2].length;
-    const start = m.index + prefixLen;
-    pushPipe(name, start, name.length);
-  }
-
-  // when executing pipeline <name>
-  const whenPipeRe = /(^|\n)(\s*when\s+executing\s+pipeline\s+)([A-Za-z_][\w-]*)/g;
-  for (let m; (m = whenPipeRe.exec(text)); ) {
-    const name = m[3];
-    const prefixLen = (m[1] ? m[1].length : 0) + m[2].length;
-    const start = m.index + prefixLen;
-    pushPipe(name, start, name.length);
-  }
-
-  // with/and mock pipeline <name> returning `...`
-  const mockPipeRe = /(^|\n)(\s*(?:with|and)\s+mock\s+pipeline\s+)([A-Za-z_][\w-]*)\s+returning\s+`/g;
-  for (let m; (m = mockPipeRe.exec(text)); ) {
-    const name = m[3];
-    const prefixLen = (m[1] ? m[1].length : 0) + m[2].length;
-    const start = m.index + prefixLen;
-    pushPipe(name, start, name.length);
-  }
-
-  // |> <step>: <var>
-  const stepVarRe = /(^|\n)(\s*\|>\s*([A-Za-z_][\w-]*)\s*:\s*)([A-Za-z_][\w-]*)/g;
-  for (let m; (m = stepVarRe.exec(text)); ) {
-    const stepType = m[3];
-    if (stepType === 'pipeline') continue;
-    const varName = m[4];
-    const key = `${stepType}::${varName}`;
-    const prefixLen = (m[1] ? m[1].length : 0) + m[2].length;
-    const start = m.index + prefixLen;
-    pushVar(key, start, varName.length);
-  }
-
-  // when executing variable <type> <name>
-  const whenVarRe = /(^|\n)(\s*when\s+executing\s+variable\s+([A-Za-z_][\w-]*)\s+)([A-Za-z_][\w-]*)/g;
-  for (let m; (m = whenVarRe.exec(text)); ) {
-    const varType = m[3];
-    const varName = m[4];
-    const key = `${varType}::${varName}`;
-    const prefixLen = (m[1] ? m[1].length : 0) + m[2].length;
-    const start = m.index + prefixLen;
-    pushVar(key, start, varName.length);
-  }
-
-  // with/and mock <type>.<name> returning `...`
-  const mockVarRe = /(^|\n)(\s*(?:with|and)\s+mock\s+([A-Za-z_][\w-]*)\.)([A-Za-z_][\w-]*)\s+returning\s+`/g;
-  for (let m; (m = mockVarRe.exec(text)); ) {
-    const varType = m[3];
-    const varName = m[4];
-    const key = `${varType}::${varName}`;
-    const prefixLen = (m[1] ? m[1].length : 0) + m[2].length;
-    const start = m.index + prefixLen;
-    pushVar(key, start, varName.length);
-  }
-
-  return { variableRefs, pipelineRefs };
 }
 
 function collectHandlebarsContentRanges(text: string): RangeAbs[] {

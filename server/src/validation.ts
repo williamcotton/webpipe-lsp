@@ -79,8 +79,21 @@ export class DocumentValidator {
       this.validateJoinAsyncReferences(text, push);
       this.validateTestLetVariables(text, push, program);
 
-    } catch (_e) {
-      // Best-effort validation; avoid crashing on regex issues
+    } catch (e) {
+      // Log validation errors instead of silently swallowing them
+      // This helps debug validation issues while preventing LSP crashes
+      console.error('Validation error:', e);
+
+      // Still add a diagnostic so the user knows something went wrong
+      diagnostics.push({
+        severity: DiagnosticSeverity.Warning,
+        range: {
+          start: doc.positionAt(0),
+          end: doc.positionAt(0)
+        },
+        message: 'Some validations could not complete due to an internal error',
+        source: 'webpipe-lsp'
+      });
     }
   }
 
