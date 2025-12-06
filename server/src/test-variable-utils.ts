@@ -65,6 +65,49 @@ export function extractJqVariables(
 }
 
 /**
+ * Finds which describe block contains the given offset.
+ * Returns the describe AST node and its text range.
+ *
+ * Strategy: Build all ranges first, then find the best match.
+ * This ensures we get the most specific (smallest) range if multiple match.
+ */
+export function findDescribeAtOffset(
+  text: string,
+  offset: number,
+  describes: Describe[]
+): { describe: Describe; start: number; end: number } | null {
+  // Build ranges for all describes
+  const rangesWithDescribe: Array<{ describe: Describe; start: number; end: number }> = [];
+
+  for (const describe of describes) {
+    const range = findDescribeBlockRange(text, describe);
+    if (range) {
+      rangesWithDescribe.push({ describe, start: range.start, end: range.end });
+    }
+  }
+
+  // Sort by start position to ensure we process in document order
+  rangesWithDescribe.sort((a, b) => a.start - b.start);
+
+  // Find the describe that contains this offset
+  // If multiple match (overlapping ranges), take the smallest (most specific)
+  let bestMatch: { describe: Describe; start: number; end: number } | null = null;
+  let smallestSize = Infinity;
+
+  for (const item of rangesWithDescribe) {
+    if (offset >= item.start && offset < item.end) {
+      const size = item.end - item.start;
+      if (size < smallestSize) {
+        bestMatch = item;
+        smallestSize = size;
+      }
+    }
+  }
+
+  return bestMatch;
+}
+
+/**
  * Find the test context at a given offset in the text
  * Returns the test, describe, and available variables at that location
  */
@@ -76,12 +119,12 @@ export function findTestContextAtOffset(
   for (const describe of describes) {
     if (!describe.tests) continue;
 
-    // Find the describe block in the text
-    const describeRe = new RegExp(`\\bdescribe\\s+"${escapeRegex(describe.name || '')}"`, 'g');
-    const describeMatch = describeRe.exec(text);
-    if (!describeMatch) continue;
+    // Find the describe block range
+    const describeRange = findDescribeBlockRange(text, describe);
+    if (!describeRange) continue;
 
-    const describeStart = describeMatch.index;
+    const describeStart = describeRange.start;
+    const describeEnd = describeRange.end;
 
     for (const test of describe.tests) {
       if (!test.name) continue;
@@ -94,14 +137,15 @@ export function findTestContextAtOffset(
 
       const testStart = itMatch.index;
 
-      // Find the end of this test (next test or end of describe)
+      // Find the end of this test (next test or end of describe block)
       const nextTestRe = /\n\s*it\s+"/g;
       nextTestRe.lastIndex = testStart + 1;
       const nextTestMatch = nextTestRe.exec(text);
-      const testEnd = nextTestMatch ? nextTestMatch.index : text.length;
+      // Only use nextTestMatch if it's within the current describe block
+      const testEnd = (nextTestMatch && nextTestMatch.index < describeEnd) ? nextTestMatch.index : describeEnd;
 
       // Check if our offset is within this test
-      if (offset >= testStart && offset <= testEnd) {
+      if (offset >= testStart && offset < testEnd) {
         // Collect available variables
         const definedVariables = new Set<string>();
 
@@ -163,23 +207,39 @@ export function getLetVariableValue(
 }
 
 /**
- * Find the text range of a describe block
+ * Find the text range of a describe block.
+ * Uses a more robust approach: find ALL describe statements first,
+ * then determine ranges based on their positions.
  */
 export function findDescribeBlockRange(
   text: string,
   describe: Describe
 ): { start: number; end: number } | null {
-  const describeRe = new RegExp(`\\bdescribe\\s+"${escapeRegex(describe.name || '')}"`, 'g');
-  const describeMatch = describeRe.exec(text);
-  if (!describeMatch) return null;
+  // Find all describe statements in the text
+  const allDescribes: Array<{ name: string; start: number }> = [];
+  const describePattern = /\bdescribe\s+"([^"]+)"/g;
+  let match;
 
-  const describeStart = describeMatch.index;
+  while ((match = describePattern.exec(text)) !== null) {
+    allDescribes.push({
+      name: match[1],
+      start: match.index
+    });
+  }
 
-  // Find the end of this describe block (next describe or end of file)
-  const nextDescribeRe = /\n\s*describe\s+"/g;
-  nextDescribeRe.lastIndex = describeStart + 1;
-  const nextDescribeMatch = nextDescribeRe.exec(text);
-  const describeEnd = nextDescribeMatch ? nextDescribeMatch.index : text.length;
+  // Sort by position
+  allDescribes.sort((a, b) => a.start - b.start);
+
+  // Find our describe in the list
+  const targetIndex = allDescribes.findIndex(d => d.name === describe.name);
+  if (targetIndex === -1) return null;
+
+  const describeStart = allDescribes[targetIndex].start;
+
+  // End is either the start of the next describe, or EOF
+  const describeEnd = targetIndex < allDescribes.length - 1
+    ? allDescribes[targetIndex + 1].start
+    : text.length;
 
   return { start: describeStart, end: describeEnd };
 }

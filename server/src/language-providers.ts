@@ -3,12 +3,13 @@ import {
   Location, Position, Hover, MarkupKind, ReferenceParams,
   HoverParams, DefinitionParams, RenameParams, WorkspaceEdit, TextEdit
 } from 'vscode-languageserver/node';
+import { Describe } from 'webpipe-js';
 import { getWordAt, createMarkdownCodeBlock } from './utils';
 import { RangeAbs, SymbolTable, HandlebarsSymbols } from './types';
 import { getMiddlewareDoc, formatMiddlewareHover } from './middleware-docs';
 import { getConfigDoc, formatConfigHover } from './config-docs';
 import { DocumentCache } from './document-cache';
-import { findTestContextAtOffset, getLetVariableValue } from './test-variable-utils';
+import { findTestContextAtOffset, findDescribeBlockRange, getLetVariableValue } from './test-variable-utils';
 
 /**
  * Language providers for hover, definition, and references.
@@ -637,29 +638,72 @@ export class LanguageProviders {
       return null;
     }
 
-    // Find the test context at the current offset
+    // Try to find a test context first (if we're inside a test)
     const testContext = findTestContextAtOffset(text, offset, program.describes);
-    if (!testContext) {
-      return null;
+
+    if (testContext) {
+      // We're inside a test - get variable value from test context
+      const varInfo = getLetVariableValue(word, testContext);
+      if (!varInfo) return null;
+
+      const formattedValue = varInfo.format === 'quoted'
+        ? `"${varInfo.value}"`
+        : varInfo.format === 'backtick'
+        ? `\`${varInfo.value}\``
+        : varInfo.value;
+
+      const snippet = `let ${word} = ${formattedValue}`;
+      const md = createMarkdownCodeBlock('webpipe', snippet);
+      return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
 
-    // Get the let variable value
-    const varInfo = getLetVariableValue(word, testContext);
-    if (!varInfo) {
-      return null;
+    // No test context - try matching against describe-level variables
+    // Strategy: Find the most specific (smallest) matching describe block
+    const symbols = this.cache.getSymbols(doc);
+
+    let bestMatch: { describe: Describe; value: string; format: 'quoted' | 'backtick' | 'bare' } | null = null;
+    let smallestRange = Infinity;
+
+    for (const pos of symbols.testLetVariablePositions) {
+      // Only check describe-level variables (no testName)
+      if (pos.testName || pos.name !== word) continue;
+
+      // Check if this variable's describe block contains the current offset
+      const describe = program.describes.find(d => d.name === pos.describeName);
+      if (!describe) continue;
+
+      const describeRange = findDescribeBlockRange(text, describe);
+      if (!describeRange) continue;
+
+      if (offset >= describeRange.start && offset < describeRange.end) {
+        const rangeSize = describeRange.end - describeRange.start;
+
+        // Only update if this is a smaller (more specific) range
+        if (rangeSize < smallestRange && describe.variables) {
+          for (const [name, value, format] of describe.variables) {
+            if (name === word) {
+              bestMatch = { describe, value, format };
+              smallestRange = rangeSize;
+              break;
+            }
+          }
+        }
+      }
     }
 
-    // Format the hover message using the stored format to show exact original syntax
-    const formattedValue = varInfo.format === 'quoted'
-      ? `"${varInfo.value}"`
-      : varInfo.format === 'backtick'
-      ? `\`${varInfo.value}\``
-      : varInfo.value;
+    if (bestMatch) {
+      const formattedValue = bestMatch.format === 'quoted'
+        ? `"${bestMatch.value}"`
+        : bestMatch.format === 'backtick'
+        ? `\`${bestMatch.value}\``
+        : bestMatch.value;
 
-    const snippet = `let ${word} = ${formattedValue}`;
-    const md = createMarkdownCodeBlock('webpipe', snippet);
+      const snippet = `let ${word} = ${formattedValue}`;
+      const md = createMarkdownCodeBlock('webpipe', snippet);
+      return { contents: { kind: MarkupKind.Markdown, value: md } };
+    }
 
-    return { contents: { kind: MarkupKind.Markdown, value: md } };
+    return null;
   }
 
   /**
@@ -679,29 +723,72 @@ export class LanguageProviders {
       return null;
     }
 
-    // Find the test context at the current offset
+    // Try to find a test context first (if we're inside a test)
     const testContext = findTestContextAtOffset(text, offset, program.describes);
-    if (!testContext) {
-      return null;
+
+    if (testContext) {
+      // We're inside a test - get variable value from test context
+      const varInfo = getLetVariableValue(word, testContext);
+      if (!varInfo) return null;
+
+      const formattedValue = varInfo.format === 'quoted'
+        ? `"${varInfo.value}"`
+        : varInfo.format === 'backtick'
+        ? `\`${varInfo.value}\``
+        : varInfo.value;
+
+      const snippet = `let ${word} = ${formattedValue}`;
+      const md = createMarkdownCodeBlock('webpipe', snippet);
+      return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
 
-    // Get the let variable value
-    const varInfo = getLetVariableValue(word, testContext);
-    if (!varInfo) {
-      return null;
+    // No test context - try matching against describe-level variables
+    // Strategy: Find the most specific (smallest) matching describe block
+    const symbols = this.cache.getSymbols(doc);
+
+    let bestMatch: { describe: Describe; value: string; format: 'quoted' | 'backtick' | 'bare' } | null = null;
+    let smallestRange = Infinity;
+
+    for (const pos of symbols.testLetVariablePositions) {
+      // Only check describe-level variables (no testName)
+      if (pos.testName || pos.name !== word) continue;
+
+      // Check if this variable's describe block contains the current offset
+      const describe = program.describes.find(d => d.name === pos.describeName);
+      if (!describe) continue;
+
+      const describeRange = findDescribeBlockRange(text, describe);
+      if (!describeRange) continue;
+
+      if (offset >= describeRange.start && offset < describeRange.end) {
+        const rangeSize = describeRange.end - describeRange.start;
+
+        // Only update if this is a smaller (more specific) range
+        if (rangeSize < smallestRange && describe.variables) {
+          for (const [name, value, format] of describe.variables) {
+            if (name === word) {
+              bestMatch = { describe, value, format };
+              smallestRange = rangeSize;
+              break;
+            }
+          }
+        }
+      }
     }
 
-    // Format the hover message using the stored format to show exact original syntax
-    const formattedValue = varInfo.format === 'quoted'
-      ? `"${varInfo.value}"`
-      : varInfo.format === 'backtick'
-      ? `\`${varInfo.value}\``
-      : varInfo.value;
+    if (bestMatch) {
+      const formattedValue = bestMatch.format === 'quoted'
+        ? `"${bestMatch.value}"`
+        : bestMatch.format === 'backtick'
+        ? `\`${bestMatch.value}\``
+        : bestMatch.value;
 
-    const snippet = `let ${word} = ${formattedValue}`;
-    const md = createMarkdownCodeBlock('webpipe', snippet);
+      const snippet = `let ${word} = ${formattedValue}`;
+      const md = createMarkdownCodeBlock('webpipe', snippet);
+      return { contents: { kind: MarkupKind.Markdown, value: md } };
+    }
 
-    return { contents: { kind: MarkupKind.Markdown, value: md } };
+    return null;
   }
 
   /**
@@ -726,22 +813,64 @@ export class LanguageProviders {
     // Look up in symbol table with scope awareness
     const program = this.cache.getProgram(doc);
     const symbols = this.cache.getSymbols(doc);
-    const context = findTestContextAtOffset(text, offset, program.describes);
 
-    // Find the variable in the correct scope
-    for (const pos of symbols.testLetVariablePositions) {
-      if (pos.name === word) {
-        // Check if this variable is in scope
-        if (context && context.test && pos.testName === context.test.name && pos.describeName === context.describe.name) {
-          // Test-level variable in the same test
-          const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
-          return Location.create(doc.uri, range);
-        } else if (context && !pos.testName && pos.describeName === context.describe.name) {
-          // Describe-level variable in the same describe block
+    // Try to find a test context first (if we're inside a test)
+    const testContext = findTestContextAtOffset(text, offset, program.describes);
+
+    if (testContext) {
+      // We're inside a test block - check test-level variables first
+      for (const pos of symbols.testLetVariablePositions) {
+        if (pos.name === word &&
+            pos.testName === testContext.test.name &&
+            pos.describeName === testContext.describe.name) {
+          // Found test-level variable - this shadows any describe-level variable
           const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
           return Location.create(doc.uri, range);
         }
       }
+
+      // Not found at test level, try describe level
+      for (const pos of symbols.testLetVariablePositions) {
+        if (pos.name === word &&
+            !pos.testName &&
+            pos.describeName === testContext.describe.name) {
+          // Found describe-level variable
+          const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
+          return Location.create(doc.uri, range);
+        }
+      }
+
+      return null;
+    }
+
+    // No test context - try matching against describe-level variables
+    // Strategy: Find the most specific (smallest) matching describe block
+    let bestMatch: { start: number; length: number } | null = null;
+    let smallestRange = Infinity;
+
+    for (const pos of symbols.testLetVariablePositions) {
+      // Only check describe-level variables (no testName)
+      if (pos.testName || pos.name !== word) continue;
+
+      // Check if this variable's describe block contains the current offset
+      const describe = program.describes.find(d => d.name === pos.describeName);
+      if (!describe) continue;
+
+      const describeRange = findDescribeBlockRange(text, describe);
+      if (!describeRange) continue;
+
+      if (offset >= describeRange.start && offset < describeRange.end) {
+        const rangeSize = describeRange.end - describeRange.start;
+        if (rangeSize < smallestRange) {
+          bestMatch = { start: pos.start, length: pos.length };
+          smallestRange = rangeSize;
+        }
+      }
+    }
+
+    if (bestMatch) {
+      const range = { start: doc.positionAt(bestMatch.start), end: doc.positionAt(bestMatch.start + bestMatch.length) };
+      return Location.create(doc.uri, range);
     }
 
     return null;
@@ -759,22 +888,64 @@ export class LanguageProviders {
     // Look up in symbol table with scope awareness
     const program = this.cache.getProgram(doc);
     const symbols = this.cache.getSymbols(doc);
-    const context = findTestContextAtOffset(text, offset, program.describes);
 
-    // Find the variable in the correct scope
-    for (const pos of symbols.testLetVariablePositions) {
-      if (pos.name === word) {
-        // Check if this variable is in scope
-        if (context && context.test && pos.testName === context.test.name && pos.describeName === context.describe.name) {
-          // Test-level variable in the same test
-          const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
-          return Location.create(doc.uri, range);
-        } else if (context && !pos.testName && pos.describeName === context.describe.name) {
-          // Describe-level variable in the same describe block
+    // Try to find a test context first (if we're inside a test)
+    const testContext = findTestContextAtOffset(text, offset, program.describes);
+
+    if (testContext) {
+      // We're inside a test block - check test-level variables first
+      for (const pos of symbols.testLetVariablePositions) {
+        if (pos.name === word &&
+            pos.testName === testContext.test.name &&
+            pos.describeName === testContext.describe.name) {
+          // Found test-level variable - this shadows any describe-level variable
           const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
           return Location.create(doc.uri, range);
         }
       }
+
+      // Not found at test level, try describe level
+      for (const pos of symbols.testLetVariablePositions) {
+        if (pos.name === word &&
+            !pos.testName &&
+            pos.describeName === testContext.describe.name) {
+          // Found describe-level variable
+          const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
+          return Location.create(doc.uri, range);
+        }
+      }
+
+      return null;
+    }
+
+    // No test context - try matching against describe-level variables
+    // Strategy: Find the most specific (smallest) matching describe block
+    let bestMatch: { start: number; length: number } | null = null;
+    let smallestRange = Infinity;
+
+    for (const pos of symbols.testLetVariablePositions) {
+      // Only check describe-level variables (no testName)
+      if (pos.testName || pos.name !== word) continue;
+
+      // Check if this variable's describe block contains the current offset
+      const describe = program.describes.find(d => d.name === pos.describeName);
+      if (!describe) continue;
+
+      const describeRange = findDescribeBlockRange(text, describe);
+      if (!describeRange) continue;
+
+      if (offset >= describeRange.start && offset < describeRange.end) {
+        const rangeSize = describeRange.end - describeRange.start;
+        if (rangeSize < smallestRange) {
+          bestMatch = { start: pos.start, length: pos.length };
+          smallestRange = rangeSize;
+        }
+      }
+    }
+
+    if (bestMatch) {
+      const range = { start: doc.positionAt(bestMatch.start), end: doc.positionAt(bestMatch.start + bestMatch.length) };
+      return Location.create(doc.uri, range);
     }
 
     return null;

@@ -6,12 +6,14 @@ import {
 } from 'vscode-languageserver/node';
 import { getWordAt } from './utils';
 import { DocumentCache } from './document-cache';
-import { createScopedKey } from './symbol-collector';
+import { filterReferencesInScope } from './symbol-collector';
 
 export class UIProviders {
   constructor(private cache: DocumentCache) {}
 
   onCodeLens(_params: CodeLensParams, doc: TextDocument): CodeLens[] {
+    const program = this.cache.getProgram(doc);
+    const text = this.cache.getText(doc);
     const symbols = this.cache.getSymbols(doc);
     const lenses: CodeLens[] = [];
 
@@ -48,10 +50,14 @@ export class UIProviders {
 
     // Test let variable code lenses
     for (const pos of symbols.testLetVariablePositions) {
-      const scopedKey = createScopedKey(pos.describeName, pos.name, pos.testName);
-      const refs = symbols.testLetVariableRefs.get(scopedKey) || [];
+      // Get all references for this variable name
+      const allRefs = symbols.testLetVariableRefs.get(pos.name) || [];
+
+      // Filter to only references in scope using positional matching
+      const scopedRefs = filterReferencesInScope(pos, allRefs, text, program);
+
       const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
-      const locations = refs.map(r => Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
+      const locations = scopedRefs.map(r => Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
       lenses.push({
         range,
         command: {

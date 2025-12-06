@@ -691,14 +691,67 @@ export class DocumentValidator {
 
     // Process each describe block
     for (const describe of program.describes) {
-      if (!describe.tests) continue;
-
       // Find the describe block in the text
       const describeRe = new RegExp(`\\bdescribe\\s+"${escapeRegex(describe.name || '')}"`, 'g');
       const describeMatch = describeRe.exec(text);
       if (!describeMatch) continue;
 
       const describeStart = describeMatch.index;
+
+      // Collect describe-level variables for validating describe-level mocks
+      const describeVariables = new Set<string>();
+      if (describe.variables) {
+        for (const [name] of describe.variables) {
+          describeVariables.add(name);
+        }
+      }
+
+      // Helper to validate a string and report undefined variables (reusable)
+      const makeValidator = (definedVars: Set<string>, searchAfter: number) => {
+        return (str: string | undefined) => {
+          if (!str) return;
+
+          const offset = findOffset(searchAfter, str.substring(0, Math.min(50, str.length)));
+
+          // Check Handlebars variables {{varName}}
+          const handlebarsVars = extractHandlebarsVariables(str, offset);
+          for (const v of handlebarsVars) {
+            if (!definedVars.has(v.name)) {
+              push(
+                DiagnosticSeverity.Error,
+                v.start,
+                v.end,
+                `Variable '${v.name}' is not defined in this test block`
+              );
+            }
+          }
+
+          // Check JQ variables $varName
+          const jqVars = extractJqVariables(str, offset);
+          for (const v of jqVars) {
+            if (!definedVars.has(v.name)) {
+              push(
+                DiagnosticSeverity.Error,
+                v.start,
+                v.end,
+                `Variable '${v.name}' is not defined in this test block`
+              );
+            }
+          }
+        };
+      };
+
+      // Validate describe-level mocks
+      if (describe.mocks) {
+        const validateDescribeMock = makeValidator(describeVariables, describeStart);
+        for (const mock of describe.mocks) {
+          if (mock.returnValue) {
+            validateDescribeMock(mock.returnValue);
+          }
+        }
+      }
+
+      if (!describe.tests) continue;
 
       for (const test of describe.tests) {
         if (!test.name) continue;
@@ -726,58 +779,37 @@ export class DocumentValidator {
           }
         }
 
-        // Helper to validate a string and report undefined variables
-        const validateString = (str: string | undefined, searchAfter: number, context: string) => {
-          if (!str) return;
-
-          const offset = findOffset(searchAfter, str.substring(0, Math.min(50, str.length)));
-
-          // Check Handlebars variables {{varName}}
-          const handlebarsVars = extractHandlebarsVariables(str, offset);
-          for (const v of handlebarsVars) {
-            if (!definedVariables.has(v.name)) {
-              push(
-                DiagnosticSeverity.Error,
-                v.start,
-                v.end,
-                `Variable '${v.name}' is not defined in this test block`
-              );
-            }
-          }
-
-          // Check JQ variables $varName
-          const jqVars = extractJqVariables(str, offset);
-          for (const v of jqVars) {
-            if (!definedVariables.has(v.name)) {
-              push(
-                DiagnosticSeverity.Error,
-                v.start,
-                v.end,
-                `Variable '${v.name}' is not defined in this test block`
-              );
-            }
-          }
-        };
+        // Use makeValidator for test-level validation
+        const validateString = makeValidator(definedVariables, testStart);
 
         // Validate path in 'when calling' statements
         if (test.when && test.when.kind === 'CallingRoute' && test.when.path) {
-          validateString(test.when.path, testStart, 'path');
+          validateString(test.when.path);
         }
 
         // Validate input, body, headers, cookies
-        validateString(test.input, testStart, 'input');
-        validateString(test.body, testStart, 'body');
-        validateString(test.headers, testStart, 'headers');
-        validateString(test.cookies, testStart, 'cookies');
+        validateString(test.input);
+        validateString(test.body);
+        validateString(test.headers);
+        validateString(test.cookies);
 
         // Validate conditions (assertions)
         if (test.conditions) {
           for (const condition of test.conditions) {
             if (condition.value) {
-              validateString(condition.value, testStart, 'condition value');
+              validateString(condition.value);
             }
             if (condition.selector) {
-              validateString(condition.selector, testStart, 'selector');
+              validateString(condition.selector);
+            }
+          }
+        }
+
+        // Validate mock return values
+        if (test.mocks) {
+          for (const mock of test.mocks) {
+            if (mock.returnValue) {
+              validateString(mock.returnValue);
             }
           }
         }
