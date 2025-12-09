@@ -404,236 +404,300 @@
     "middleware-step": {
       "patterns": [
         {
-          "begin": "^\\s*(\\|>)\\s*(jq)(?:(\\(|\\[).*?(\\)|\\]))?\\s*:\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(jq)",
           "beginCaptures": {
-            "1": {
-              "name": "keyword.operator.pipe.webpipe"
-            },
-            "2": {
-              "name": "entity.name.function.middleware.jq.webpipe"
-            },
-            "3": {
-              "name": "meta.parens.webpipe"
-            },
-            "4": {
-              "name": "meta.parens.webpipe"
-            }
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.jq.webpipe" }
           },
-          "end": "`",
-          "name": "meta.embedded.jq.webpipe",
-          "contentName": "source.jq",
+          "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
             {
-              "include": "#jq-embedded"
-            }
+              "begin": "\\(", "end": "\\)",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "begin": "\\[", "end": "\\]",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "match": ":",
+              "name": "punctuation.separator.key-value.webpipe"
+            },
+            {
+              "begin": "`",
+              "end": "`",
+              "name": "meta.embedded.jq.webpipe",
+              "contentName": "source.jq",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            { "include": "#tags" },
+            { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(lua):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(lua)",
           "beginCaptures": {
-            "1": {
-              "name": "keyword.operator.pipe.webpipe"
-            },
-            "2": {
-              "name": "entity.name.function.middleware.lua.webpipe"
-            }
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.lua.webpipe" }
           },
-          "end": "`",
-          "name": "meta.embedded.lua.webpipe",
-          "contentName": "source.lua",
+          "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
             {
-              "include": "source.lua"
-            }
+              "begin": "\\(", "end": "\\)",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "begin": "\\[", "end": "\\]",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "match": ":",
+              "name": "punctuation.separator.key-value.webpipe"
+            },
+            {
+              "begin": "`",
+              "end": "`",
+              "name": "meta.embedded.lua.webpipe",
+              "contentName": "source.lua",
+              "patterns": [ { "include": "source.lua" } ]
+            },
+            { "include": "#tags" },
+            { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(pg)(?:(\\(|\\[).*?(\\)|\\]))?\\s*:\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(pg)",
           "beginCaptures": {
-            "1": {
-              "name": "keyword.operator.pipe.webpipe"
-            },
-            "2": {
-              "name": "entity.name.function.middleware.pg.webpipe"
-            },
-            "3": {
-              "name": "meta.parens.webpipe"
-            },
-            "4": {
-              "name": "meta.parens.webpipe"
-            }
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.pg.webpipe" }
           },
-          "end": "`",
-          "name": "meta.embedded.sql.webpipe",
-          "contentName": "source.sql",
+          "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
             {
-              "include": "#sql-string-override"
+              "begin": "\\(", "end": "\\)",
+              "patterns": [ { "include": "#jq-embedded" } ]
             },
             {
-              "include": "source.sql"
-            }
+              "begin": "\\[", "end": "\\]",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "match": ":",
+              "name": "punctuation.separator.key-value.webpipe"
+            },
+            {
+              "begin": "`",
+              "end": "`",
+              "name": "meta.embedded.sql.webpipe",
+              "contentName": "source.sql",
+              "patterns": [
+                { "include": "#sql-string-override" },
+                { "include": "source.sql" }
+              ]
+            },
+            { "include": "#tags" },
+            { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(mustache):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(mustache)",
           "beginCaptures": {
-            "1": {
-              "name": "keyword.operator.pipe.webpipe"
-            },
-            "2": {
-              "name": "entity.name.function.middleware.mustache.webpipe"
-            }
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.mustache.webpipe" }
           },
-          "end": "`",
-          "name": "meta.embedded.mustache.webpipe",
-          "contentName": "text.html.mustache",
+          "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
             {
-              "include": "#mustache-embedded"
-            }
+              "begin": "\\(", "end": "\\)",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "begin": "\\[", "end": "\\]",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "match": ":",
+              "name": "punctuation.separator.key-value.webpipe"
+            },
+            {
+              "begin": "`",
+              "end": "`",
+              "name": "meta.embedded.mustache.webpipe",
+              "contentName": "text.html.mustache",
+              "patterns": [ { "include": "#mustache-embedded" } ]
+            },
+            { "include": "#tags" },
+            { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(handlebars):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(handlebars)",
           "beginCaptures": {
-            "1": {
-              "name": "keyword.operator.pipe.webpipe"
-            },
-            "2": {
-              "name": "entity.name.function.middleware.handlebars.webpipe"
-            }
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.handlebars.webpipe" }
           },
-          "end": "`",
-          "name": "meta.embedded.handlebars.webpipe",
-          "contentName": "text.html.mustache",
+          "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
             {
-              "include": "#mustache-embedded"
-            }
+              "begin": "\\(", "end": "\\)",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "begin": "\\[", "end": "\\]",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "match": ":",
+              "name": "punctuation.separator.key-value.webpipe"
+            },
+            {
+              "begin": "`",
+              "end": "`",
+              "name": "meta.embedded.handlebars.webpipe",
+              "contentName": "text.html.mustache",
+              "patterns": [ { "include": "#mustache-embedded" } ]
+            },
+            { "include": "#tags" },
+            { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(validate):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(validate)",
           "beginCaptures": {
-            "1": {
-              "name": "keyword.operator.pipe.webpipe"
-            },
-            "2": {
-              "name": "entity.name.function.middleware.validate.webpipe"
-            }
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.validate.webpipe" }
           },
-          "end": "`",
-          "name": "meta.embedded.validate.webpipe",
-          "contentName": "source.validate.webpipe",
+          "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
             {
-              "include": "#validate-embedded"
-            }
+              "begin": "\\(", "end": "\\)",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "begin": "\\[", "end": "\\]",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "match": ":",
+              "name": "punctuation.separator.key-value.webpipe"
+            },
+            {
+              "begin": "`",
+              "end": "`",
+              "name": "meta.embedded.validate.webpipe",
+              "contentName": "source.validate.webpipe",
+              "patterns": [ { "include": "#validate-embedded" } ]
+            },
+            { "include": "#tags" },
+            { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(graphql)(?:(\\(|\\[).*?(\\)|\\]))?\\s*:\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(graphql)",
           "beginCaptures": {
-            "1": {
-              "name": "keyword.operator.pipe.webpipe"
-            },
-            "2": {
-              "name": "entity.name.function.middleware.graphql.webpipe"
-            },
-            "3": {
-              "name": "meta.parens.webpipe"
-            },
-            "4": {
-              "name": "meta.parens.webpipe"
-            }
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.graphql.webpipe" }
           },
-          "end": "`",
-          "name": "meta.embedded.graphql.webpipe",
-          "contentName": "source.graphql",
+          "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
             {
-              "include": "source.graphql"
-            }
+              "begin": "\\(",
+              "end": "\\)",
+              "beginCaptures": { "0": { "name": "meta.parens.webpipe" } },
+              "endCaptures": { "0": { "name": "meta.parens.webpipe" } },
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "begin": "\\[",
+              "end": "\\]",
+              "beginCaptures": { "0": { "name": "meta.brackets.webpipe" } },
+              "endCaptures": { "0": { "name": "meta.brackets.webpipe" } },
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "match": ":",
+              "name": "punctuation.separator.key-value.webpipe"
+            },
+            {
+              "begin": "`",
+              "end": "`",
+              "name": "meta.embedded.graphql.webpipe",
+              "contentName": "source.graphql",
+              "patterns": [ { "include": "source.graphql" } ]
+            },
+            { "include": "#tags" },
+            { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(join):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(join)",
           "beginCaptures": {
-            "1": {
-              "name": "keyword.operator.pipe.webpipe"
-            },
-            "2": {
-              "name": "entity.name.function.middleware.join.webpipe"
-            }
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.join.webpipe" }
           },
-          "end": "`",
-          "name": "meta.embedded.join.webpipe",
+          "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
             {
-              "include": "#join-config"
-            }
-          ]
-        },
-        {
-          "begin": "^\\s*(\\|>)\\s*(join):\\s*\"",
-          "beginCaptures": {
-            "1": {
-              "name": "keyword.operator.pipe.webpipe"
+              "begin": "\\(", "end": "\\)",
+              "patterns": [ { "include": "#jq-embedded" } ]
             },
-            "2": {
-              "name": "entity.name.function.middleware.join.webpipe"
-            }
-          },
-          "end": "\"",
-          "name": "meta.embedded.join.webpipe",
-          "patterns": [
             {
-              "include": "#join-config"
-            }
+              "begin": "\\[", "end": "\\]",
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "match": ":",
+              "name": "punctuation.separator.key-value.webpipe"
+            },
+            {
+              "begin": "`",
+              "end": "`",
+              "name": "meta.embedded.join.webpipe",
+              "patterns": [ { "include": "#join-config" } ]
+            },
+            {
+              "begin": "\"",
+              "end": "\"",
+              "name": "meta.embedded.join.webpipe",
+              "patterns": [ { "include": "#join-config" } ]
+            },
+            { "include": "#tags" },
+            { "include": "#comments" }
           ]
         },
         {
           "comment": "Generic middleware capture (handles fetch, log, etc with arguments)",
           "begin": "^\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_-]*)",
           "beginCaptures": {
-            "1": {
-              "name": "keyword.operator.pipe.webpipe"
-            },
-            "2": {
-              "name": "entity.name.function.middleware.webpipe"
-            }
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.webpipe" }
           },
           "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
             {
-              "comment": "Arguments and Separator. Consumes everything up to the colon, correctly handling strings via jq-embedded.",
-              "begin": "\\G",
-              "end": "(:)",
-              "endCaptures": {
-                "1": {
-                  "name": "punctuation.separator.key-value.webpipe"
-                }
-              },
-              "patterns": [
-                {
-                  "include": "#jq-embedded"
-                },
-                {
-                  "include": "#comments"
-                }
-              ]
+              "begin": "\\(",
+              "end": "\\)",
+              "beginCaptures": { "0": { "name": "meta.parens.webpipe" } },
+              "endCaptures": { "0": { "name": "meta.parens.webpipe" } },
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "begin": "\\[",
+              "end": "\\]",
+              "beginCaptures": { "0": { "name": "meta.brackets.webpipe" } },
+              "endCaptures": { "0": { "name": "meta.brackets.webpipe" } },
+              "patterns": [ { "include": "#jq-embedded" } ]
+            },
+            {
+              "match": ":",
+              "name": "punctuation.separator.key-value.webpipe"
             },
             {
               "comment": "Config: Backtick",
               "begin": "`",
               "end": "`",
               "name": "string.quoted.other.backtick.webpipe",
-              "patterns": [
-                {
-                  "include": "#jq-embedded"
-                }
-              ]
+              "patterns": [ { "include": "#jq-embedded" } ]
             },
             {
               "comment": "Config: Double Quote",
@@ -646,12 +710,8 @@
               "match": "[a-zA-Z_][a-zA-Z0-9_-]*",
               "name": "variable.other.webpipe"
             },
-            {
-              "include": "#tags"
-            },
-            {
-              "include": "#comments"
-            }
+            { "include": "#tags" },
+            { "include": "#comments" }
           ]
         }
       ]
