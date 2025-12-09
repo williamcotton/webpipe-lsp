@@ -94,7 +94,7 @@
               ]
             }
           },
-          "end": "^(?!\\s*\\|>)(?=\\S|$)",
+          "end": "^(?!\\s*\\|>)(?=\\S)",
           "patterns": [
             {
               "include": "#comments"
@@ -134,7 +134,7 @@
               "name": "entity.name.function.query.webpipe"
             }
           },
-          "end": "^(?!\\s*\\|>)(?=\\S|$)",
+          "end": "^(?!\\s*\\|>)(?=\\S)",
           "name": "meta.query-resolver.webpipe",
           "patterns": [
             {
@@ -155,7 +155,7 @@
               "name": "entity.name.function.mutation.webpipe"
             }
           },
-          "end": "^(?!\\s*\\|>)(?=\\S|$)",
+          "end": "^(?!\\s*\\|>)(?=\\S)",
           "name": "meta.mutation-resolver.webpipe",
           "patterns": [
             {
@@ -173,7 +173,7 @@
               "name": "storage.type.feature-flags.webpipe"
             }
           },
-          "end": "^(?!\\s*\\|>)(?=\\S|$)",
+          "end": "^(?!\\s*\\|>)(?=\\S)",
           "name": "meta.feature-flags.webpipe",
           "patterns": [
             {
@@ -194,7 +194,7 @@
               "name": "variable.other.assignment.webpipe"
             }
           },
-          "end": "^(?!\\s*\\|>)(?=\\S|$)",
+          "end": "^(?!\\s*\\|>)(?=\\S)",
           "name": "meta.variable-assignment.pipeline.webpipe",
           "patterns": [
             {
@@ -610,7 +610,7 @@
           "name": "keyword.control.result.webpipe"
         }
       },
-      "end": "^(?!\\s*[a-zA-Z]+\\(\\d+\\):)(?!\\s*\\|>)(?=\\S|$)",
+      "end": "^(?!\\s*[a-zA-Z]+\\(\\d+\\):)(?!\\s*\\|>)(?=\\S)",
       "patterns": [
         {
           "include": "#result-conditions"
@@ -651,7 +651,7 @@
           "name": "keyword.control.if.webpipe"
         }
       },
-      "end": "^(?!\\s*then:|\\s*else:|\\s*\\|>)(?=\\S|$)",
+      "end": "^(?!\\s*then:|\\s*else:|\\s*\\|>)(?=\\S)",
       "patterns": [
         {
           "include": "#if-branches"
