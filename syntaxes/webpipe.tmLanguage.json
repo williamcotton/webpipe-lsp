@@ -404,270 +404,169 @@
     "middleware-step": {
       "patterns": [
         {
-          "begin": "^\\s*(\\|>)\\s*(jq)",
+          "begin": "\\s*(\\|>)\\s*(jq)",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.jq.webpipe" }
           },
           "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
-            {
-              "begin": "\\(", "end": "\\)",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "begin": "\\[", "end": "\\]",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "match": ":",
-              "name": "punctuation.separator.key-value.webpipe"
-            },
-            {
-              "begin": "`",
-              "end": "`",
-              "name": "meta.embedded.jq.webpipe",
-              "contentName": "source.jq",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
+            { "begin": "\\(", "end": "\\)", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\\[", "end": "\\]", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
+            { "begin": "`", "end": "`", "name": "meta.embedded.jq.webpipe", "contentName": "source.jq", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
+            { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
             { "include": "#tags" },
             { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(lua)",
+          "begin": "\\s*(\\|>)\\s*(lua)",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.lua.webpipe" }
           },
           "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
-            {
-              "begin": "\\(", "end": "\\)",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "begin": "\\[", "end": "\\]",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "match": ":",
-              "name": "punctuation.separator.key-value.webpipe"
-            },
-            {
-              "begin": "`",
-              "end": "`",
-              "name": "meta.embedded.lua.webpipe",
-              "contentName": "source.lua",
-              "patterns": [ { "include": "source.lua" } ]
-            },
+            { "begin": "\\(", "end": "\\)", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\\[", "end": "\\]", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
+            { "begin": "`", "end": "`", "name": "meta.embedded.lua.webpipe", "contentName": "source.lua", "patterns": [ { "include": "source.lua" } ] },
+            { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
+            { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
             { "include": "#tags" },
             { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(pg)",
+          "begin": "\\s*(\\|>)\\s*(pg)",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.pg.webpipe" }
           },
           "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
-            {
-              "begin": "\\(", "end": "\\)",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "begin": "\\[", "end": "\\]",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "match": ":",
-              "name": "punctuation.separator.key-value.webpipe"
-            },
-            {
-              "begin": "`",
-              "end": "`",
-              "name": "meta.embedded.sql.webpipe",
-              "contentName": "source.sql",
-              "patterns": [
-                { "include": "#sql-string-override" },
-                { "include": "source.sql" }
-              ]
-            },
+            { "begin": "\\(", "end": "\\)", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\\[", "end": "\\]", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
+            { "begin": "`", "end": "`", "name": "meta.embedded.sql.webpipe", "contentName": "source.sql", "patterns": [ { "include": "#sql-string-override" }, { "include": "source.sql" } ] },
+            { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
+            { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
             { "include": "#tags" },
             { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(mustache)",
+          "begin": "\\s*(\\|>)\\s*(fetch)",
+          "beginCaptures": {
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.fetch.webpipe" }
+          },
+          "end": "(?=$|\\s*\\|>|\\s*@)",
+          "patterns": [
+            { "begin": "\\(", "end": "\\)", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\\[", "end": "\\]", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
+            { "begin": "`", "end": "`", "name": "string.quoted.other.backtick.webpipe", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
+            { "include": "#tags" },
+            { "include": "#comments" }
+          ]
+        },
+        {
+          "begin": "\\s*(\\|>)\\s*(mustache)",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.mustache.webpipe" }
           },
           "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
-            {
-              "begin": "\\(", "end": "\\)",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "begin": "\\[", "end": "\\]",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "match": ":",
-              "name": "punctuation.separator.key-value.webpipe"
-            },
-            {
-              "begin": "`",
-              "end": "`",
-              "name": "meta.embedded.mustache.webpipe",
-              "contentName": "text.html.mustache",
-              "patterns": [ { "include": "#mustache-embedded" } ]
-            },
+            { "begin": "\\(", "end": "\\)", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\\[", "end": "\\]", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
+            { "begin": "`", "end": "`", "name": "meta.embedded.mustache.webpipe", "contentName": "text.html.mustache", "patterns": [ { "include": "#mustache-embedded" } ] },
+            { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
+            { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
             { "include": "#tags" },
             { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(handlebars)",
+          "begin": "\\s*(\\|>)\\s*(handlebars)",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.handlebars.webpipe" }
           },
           "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
-            {
-              "begin": "\\(", "end": "\\)",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "begin": "\\[", "end": "\\]",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "match": ":",
-              "name": "punctuation.separator.key-value.webpipe"
-            },
-            {
-              "begin": "`",
-              "end": "`",
-              "name": "meta.embedded.handlebars.webpipe",
-              "contentName": "text.html.mustache",
-              "patterns": [ { "include": "#mustache-embedded" } ]
-            },
+            { "begin": "\\(", "end": "\\)", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\\[", "end": "\\]", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
+            { "begin": "`", "end": "`", "name": "meta.embedded.handlebars.webpipe", "contentName": "text.html.mustache", "patterns": [ { "include": "#mustache-embedded" } ] },
+            { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
+            { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
             { "include": "#tags" },
             { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(validate)",
+          "begin": "\\s*(\\|>)\\s*(validate)",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.validate.webpipe" }
           },
           "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
-            {
-              "begin": "\\(", "end": "\\)",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "begin": "\\[", "end": "\\]",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "match": ":",
-              "name": "punctuation.separator.key-value.webpipe"
-            },
-            {
-              "begin": "`",
-              "end": "`",
-              "name": "meta.embedded.validate.webpipe",
-              "contentName": "source.validate.webpipe",
-              "patterns": [ { "include": "#validate-embedded" } ]
-            },
+            { "begin": "\\(", "end": "\\)", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\\[", "end": "\\]", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
+            { "begin": "`", "end": "`", "name": "meta.embedded.validate.webpipe", "contentName": "source.validate.webpipe", "patterns": [ { "include": "#validate-embedded" } ] },
+            { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
+            { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
             { "include": "#tags" },
             { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(graphql)",
+          "begin": "\\s*(\\|>)\\s*(graphql)",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.graphql.webpipe" }
           },
           "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
-            {
-              "begin": "\\(",
-              "end": "\\)",
-              "beginCaptures": { "0": { "name": "meta.parens.webpipe" } },
-              "endCaptures": { "0": { "name": "meta.parens.webpipe" } },
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "begin": "\\[",
-              "end": "\\]",
-              "beginCaptures": { "0": { "name": "meta.brackets.webpipe" } },
-              "endCaptures": { "0": { "name": "meta.brackets.webpipe" } },
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "match": ":",
-              "name": "punctuation.separator.key-value.webpipe"
-            },
-            {
-              "begin": "`",
-              "end": "`",
-              "name": "meta.embedded.graphql.webpipe",
-              "contentName": "source.graphql",
-              "patterns": [ { "include": "source.graphql" } ]
-            },
+            { "begin": "\\(", "end": "\\)", "beginCaptures": { "0": { "name": "meta.parens.webpipe" } }, "endCaptures": { "0": { "name": "meta.parens.webpipe" } }, "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\\[", "end": "\\]", "beginCaptures": { "0": { "name": "meta.brackets.webpipe" } }, "endCaptures": { "0": { "name": "meta.brackets.webpipe" } }, "patterns": [ { "include": "#jq-embedded" } ] },
+            { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
+            { "begin": "`", "end": "`", "name": "meta.embedded.graphql.webpipe", "contentName": "source.graphql", "patterns": [ { "include": "source.graphql" } ] },
+            { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
+            { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
             { "include": "#tags" },
             { "include": "#comments" }
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(join)",
+          "begin": "\\s*(\\|>)\\s*(join)",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.join.webpipe" }
           },
           "end": "(?=$|\\s*\\|>|\\s*@)",
           "patterns": [
-            {
-              "begin": "\\(", "end": "\\)",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "begin": "\\[", "end": "\\]",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "match": ":",
-              "name": "punctuation.separator.key-value.webpipe"
-            },
-            {
-              "begin": "`",
-              "end": "`",
-              "name": "meta.embedded.join.webpipe",
-              "patterns": [ { "include": "#join-config" } ]
-            },
-            {
-              "begin": "\"",
-              "end": "\"",
-              "name": "meta.embedded.join.webpipe",
-              "patterns": [ { "include": "#join-config" } ]
-            },
+            { "begin": "\\(", "end": "\\)", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\\[", "end": "\\]", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
+            { "begin": "`", "end": "`", "name": "meta.embedded.join.webpipe", "patterns": [ { "include": "#join-config" } ] },
+            { "begin": "\"", "end": "\"", "name": "meta.embedded.join.webpipe", "patterns": [ { "include": "#join-config" } ] },
+            { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
             { "include": "#tags" },
             { "include": "#comments" }
           ]
         },
         {
           "comment": "Generic middleware capture (handles fetch, log, etc with arguments)",
-          "begin": "^\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_-]*)",
+          "begin": "\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_-]*)",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.webpipe" }
@@ -692,24 +591,9 @@
               "match": ":",
               "name": "punctuation.separator.key-value.webpipe"
             },
-            {
-              "comment": "Config: Backtick",
-              "begin": "`",
-              "end": "`",
-              "name": "string.quoted.other.backtick.webpipe",
-              "patterns": [ { "include": "#jq-embedded" } ]
-            },
-            {
-              "comment": "Config: Double Quote",
-              "begin": "\"",
-              "end": "\"",
-              "name": "string.quoted.double.webpipe"
-            },
-            {
-              "comment": "Config: Identifier",
-              "match": "[a-zA-Z_][a-zA-Z0-9_-]*",
-              "name": "variable.other.webpipe"
-            },
+            { "comment": "Config: Backtick", "begin": "`", "end": "`", "name": "string.quoted.other.backtick.webpipe", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "comment": "Config: Double Quote", "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
+            { "comment": "Config: Identifier", "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
             { "include": "#tags" },
             { "include": "#comments" }
           ]
