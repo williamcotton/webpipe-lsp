@@ -404,7 +404,7 @@
     "middleware-step": {
       "patterns": [
         {
-          "begin": "^\\s*(\\|>)\\s*(jq)(?:(\\(|\\[)[^\\)\\]]*(?:\\)|\\]))?\\s*:\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(jq)(?:(\\(|\\[).*?(\\)|\\]))?\\s*:\\s*`",
           "beginCaptures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
@@ -413,6 +413,9 @@
               "name": "entity.name.function.middleware.jq.webpipe"
             },
             "3": {
+              "name": "meta.parens.webpipe"
+            },
+            "4": {
               "name": "meta.parens.webpipe"
             }
           },
@@ -445,7 +448,7 @@
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(pg)(?:(\\(|\\[)[^\\)\\]]*(?:\\)|\\]))?\\s*:\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(pg)(?:(\\(|\\[).*?(\\)|\\]))?\\s*:\\s*`",
           "beginCaptures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
@@ -454,6 +457,9 @@
               "name": "entity.name.function.middleware.pg.webpipe"
             },
             "3": {
+              "name": "meta.parens.webpipe"
+            },
+            "4": {
               "name": "meta.parens.webpipe"
             }
           },
@@ -527,7 +533,7 @@
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(graphql)(?:(\\(|\\[)[^\\)\\]]*(?:\\)|\\]))?\\s*:\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(graphql)(?:(\\(|\\[).*?(\\)|\\]))?\\s*:\\s*`",
           "beginCaptures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
@@ -536,6 +542,9 @@
               "name": "entity.name.function.middleware.graphql.webpipe"
             },
             "3": {
+              "name": "meta.parens.webpipe"
+            },
+            "4": {
               "name": "meta.parens.webpipe"
             }
           },
