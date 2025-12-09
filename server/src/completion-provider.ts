@@ -59,13 +59,13 @@ export class CompletionProvider {
   }
 
   private getPipelineCompletion(
-    linePrefix: string, 
-    pipelineNames: Set<string>, 
-    doc: TextDocument, 
-    startOfLine: number, 
+    linePrefix: string,
+    pipelineNames: Set<string>,
+    doc: TextDocument,
+    startOfLine: number,
     offset: number
   ): CompletionItem[] | null {
-    const pipeLineRe = /^\s*\|>\s*pipeline\s*:\s*([A-Za-z_][\w-]*)?$/;
+    const pipeLineRe = /^\s*\|>\s*pipeline(?:[\(\[][^\)\]]*[\)\]])?\s*:\s*([A-Za-z_][\w-]*)?$/;
     const pm = pipeLineRe.exec(linePrefix);
     
     if (!pm) return null;
@@ -88,13 +88,13 @@ export class CompletionProvider {
   }
 
   private getVariableCompletion(
-    linePrefix: string, 
-    variablesByType: Map<string, Set<string>>, 
-    doc: TextDocument, 
-    startOfLine: number, 
+    linePrefix: string,
+    variablesByType: Map<string, Set<string>>,
+    doc: TextDocument,
+    startOfLine: number,
     offset: number
   ): CompletionItem[] | null {
-    const stepVarLineRe = /^\s*\|>\s*([A-Za-z_][\w-]*)\s*:\s*([A-Za-z_][\w-]*)?$/;
+    const stepVarLineRe = /^\s*\|>\s*([A-Za-z_][\w-]*)(?:[\(\[][^\)\]]*[\)\]])?\s*:\s*([A-Za-z_][\w-]*)?$/;
     const m = stepVarLineRe.exec(linePrefix);
     
     if (!m) return null;
@@ -173,7 +173,7 @@ export class CompletionProvider {
     startOfLine: number,
     offset: number
   ): CompletionItem[] | null {
-    const m = /^\s*\|>\s*auth\s*:\s*"([^"]*)?$/.exec(linePrefix);
+    const m = /^\s*\|>\s*auth(?:[\(\[][^\)\]]*[\)\]])?\s*:\s*"([^"]*)?$/.exec(linePrefix);
     if (!m) return null;
     const quoteStartInLine = linePrefix.lastIndexOf('"');
     const startAbs = startOfLine + quoteStartInLine + 1;

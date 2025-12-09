@@ -404,13 +404,16 @@
     "middleware-step": {
       "patterns": [
         {
-          "begin": "^\\s*(\\|>)\\s*(jq):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(jq)(?:(\\(|\\[)[^\\)\\]]*(?:\\)|\\]))?\\s*:\\s*`",
           "beginCaptures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
             },
             "2": {
               "name": "entity.name.function.middleware.jq.webpipe"
+            },
+            "3": {
+              "name": "meta.parens.webpipe"
             }
           },
           "end": "`",
@@ -442,13 +445,16 @@
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(pg):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(pg)(?:(\\(|\\[)[^\\)\\]]*(?:\\)|\\]))?\\s*:\\s*`",
           "beginCaptures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
             },
             "2": {
               "name": "entity.name.function.middleware.pg.webpipe"
+            },
+            "3": {
+              "name": "meta.parens.webpipe"
             }
           },
           "end": "`",
@@ -521,13 +527,16 @@
           ]
         },
         {
-          "begin": "^\\s*(\\|>)\\s*(graphql):\\s*`",
+          "begin": "^\\s*(\\|>)\\s*(graphql)(?:(\\(|\\[)[^\\)\\]]*(?:\\)|\\]))?\\s*:\\s*`",
           "beginCaptures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
             },
             "2": {
               "name": "entity.name.function.middleware.graphql.webpipe"
+            },
+            "3": {
+              "name": "meta.parens.webpipe"
             }
           },
           "end": "`",
@@ -576,43 +585,65 @@
           ]
         },
         {
-          "match": "^\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_-]*):\\s*`",
-          "captures": {
+          "comment": "Generic middleware capture (handles fetch, log, etc with arguments)",
+          "begin": "^\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_-]*)",
+          "beginCaptures": {
             "1": {
               "name": "keyword.operator.pipe.webpipe"
             },
             "2": {
               "name": "entity.name.function.middleware.webpipe"
             }
-          }
-        },
-        {
-          "match": "^\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_-]*):\\s*([a-zA-Z_][a-zA-Z0-9_-]*)(?!\\s*`)",
-          "captures": {
-            "1": {
-              "name": "keyword.operator.pipe.webpipe"
+          },
+          "end": "(?=$|\\s*\\|>|\\s*@)",
+          "patterns": [
+            {
+              "comment": "Arguments and Separator. Consumes everything up to the colon, correctly handling strings via jq-embedded.",
+              "begin": "\\G",
+              "end": "(:)",
+              "endCaptures": {
+                "1": {
+                  "name": "punctuation.separator.key-value.webpipe"
+                }
+              },
+              "patterns": [
+                {
+                  "include": "#jq-embedded"
+                },
+                {
+                  "include": "#comments"
+                }
+              ]
             },
-            "2": {
-              "name": "entity.name.function.middleware.webpipe"
+            {
+              "comment": "Config: Backtick",
+              "begin": "`",
+              "end": "`",
+              "name": "string.quoted.other.backtick.webpipe",
+              "patterns": [
+                {
+                  "include": "#jq-embedded"
+                }
+              ]
             },
-            "3": {
-              "name": "variable.other.webpipe"
-            }
-          }
-        },
-        {
-          "match": "^\\s*(\\|>)\\s*([a-zA-Z_][a-zA-Z0-9_-]*):\\s*\"([^\"]+)\"",
-          "captures": {
-            "1": {
-              "name": "keyword.operator.pipe.webpipe"
-            },
-            "2": {
-              "name": "entity.name.function.middleware.webpipe"
-            },
-            "3": {
+            {
+              "comment": "Config: Double Quote",
+              "begin": "\"",
+              "end": "\"",
               "name": "string.quoted.double.webpipe"
+            },
+            {
+              "comment": "Config: Identifier",
+              "match": "[a-zA-Z_][a-zA-Z0-9_-]*",
+              "name": "variable.other.webpipe"
+            },
+            {
+              "include": "#tags"
+            },
+            {
+              "include": "#comments"
             }
-          }
+          ]
         }
       ]
     },
