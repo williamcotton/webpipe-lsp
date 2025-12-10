@@ -37,9 +37,11 @@ export class LanguageProviders {
       return { node: null, kind: 'unknown' };
     }
 
+    const nodeAny = node as any;
+
     // Determine the kind of node
     if ('varType' in node && 'name' in node && 'value' in node) {
-      return { node, kind: 'variable', varType: (node as any).varType };
+      return { node, kind: 'variable', varType: nodeAny.varType };
     }
     if ('name' in node && 'pipeline' in node && !('varType' in node)) {
       return { node, kind: 'pipeline' };
@@ -50,36 +52,25 @@ export class LanguageProviders {
     if ('method' in node && 'path' in node) {
       return { node, kind: 'route' };
     }
-    if ('kind' in node && (node as any).kind === 'Regular') {
-      const step = node as any;
+    if ('kind' in node && nodeAny.kind === 'Regular') {
+      const step = nodeAny;
 
       // Check if we're in a GraphQL middleware step
       if (step.name === 'graphql' && step.configType === 'backtick') {
-        this.connection?.console.log(`[GraphQL] Found graphql middleware step at offset ${offset}`);
-        this.connection?.console.log(`[GraphQL] Step config: ${step.config}`);
-        this.connection?.console.log(`[GraphQL] Step start: ${step.start}`);
-
         // Find where the config string actually starts in the document
         // The step.start is the start of the entire step (including |>)
         // We need to find the opening backtick
         const text = this.cache.getText(doc);
         const configStart = text.indexOf(step.config, step.start);
 
-        this.connection?.console.log(`[GraphQL] Config starts at: ${configStart}`);
-
-        if (configStart === -1) {
-          this.connection?.console.log(`[GraphQL] ERROR: Could not find config in document`);
-        } else {
+        if (configStart !== -1) {
           const graphqlInfo = this.getGraphQLOperationAtOffset(
             step.config,
             configStart,
             offset
           );
 
-          this.connection?.console.log(`[GraphQL] graphqlInfo: ${JSON.stringify(graphqlInfo)}`);
-
           if (graphqlInfo) {
-            this.connection?.console.log(`[GraphQL] Detected GraphQL context: ${graphqlInfo.type} ${graphqlInfo.name}`);
             return {
               node,
               kind: 'graphql',
@@ -97,6 +88,25 @@ export class LanguageProviders {
     }
     if ('target' in node && 'returnValue' in node) {
       return { node, kind: 'mock' };
+    }
+
+    // Check if we're on a condition node (e.g., call assertion)
+    // If so, find the parent test node
+    if ((nodeAny.kind === 'CallAssertion' || nodeAny.isCallAssertion) &&
+        (nodeAny.callTarget || nodeAny.target)) {
+      // Search through all test nodes to find which one contains this offset
+      if (program.describes) {
+        for (const describe of program.describes) {
+          if (describe.tests) {
+            for (const test of describe.tests) {
+              if (test.start !== undefined && test.end !== undefined &&
+                  offset >= test.start && offset <= test.end) {
+                return { node: test as any, kind: 'test' };
+              }
+            }
+          }
+        }
+      }
     }
 
     return { node, kind: 'unknown' };
@@ -219,18 +229,16 @@ export class LanguageProviders {
 
     // GraphQL resolver hover (middleware context)
     if (context.kind === 'graphql') {
-      this.connection?.console.log(`[GraphQL Hover] Context kind is 'graphql': ${context.graphqlType} ${context.graphqlName}`);
       const md = this.formatGraphQLHover(
         text,
         context.graphqlType!,
         context.graphqlName!
       );
-      this.connection?.console.log(`[GraphQL Hover] formatGraphQLHover result: ${md ? 'found' : 'not found'}`);
       if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
 
     // GraphQL query/mutation hover (mock/call assertion context)
-    const graphqlHover = this.getGraphQLHoverAST(context, text, word);
+    const graphqlHover = this.getGraphQLHoverAST(context, text, word, offset);
     if (graphqlHover) return graphqlHover;
 
     // Handlebars partial hover
@@ -287,7 +295,7 @@ export class LanguageProviders {
     }
 
     // GraphQL resolver definition (mock/call assertion context)
-    const graphqlDef = this.getGraphQLDefinitionAST(context, word, symbols, doc);
+    const graphqlDef = this.getGraphQLDefinitionAST(context, word, symbols, doc, offset);
     if (graphqlDef) return graphqlDef;
 
     // Test let variable definition (Handlebars {{var}})
@@ -400,17 +408,30 @@ export class LanguageProviders {
   /**
    * AST-based GraphQL hover
    */
-  private getGraphQLHoverAST(context: ReturnType<typeof this.getASTContext>, text: string, word: string): Hover | null {
+  private getGraphQLHoverAST(context: ReturnType<typeof this.getASTContext>, text: string, word: string, offset: number): Hover | null {
     if (context.kind === 'mock' && context.node) {
       const mockNode = context.node as any;
       const target = mockNode.target || '';
 
       // Check if it's a GraphQL mock: "query <name>" or "mutation <name>"
-      const match = /^(query|mutation)\s+([A-Za-z_][\w-]*)/.exec(target);
-      if (match && match[2] === word) {
-        const resolverType = match[1];
-        const md = this.formatGraphQLHover(text, resolverType, word);
-        if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
+      const match = /^(query|mutation)[.\s]+([A-Za-z_][\w-]*)/.exec(target);
+
+      if (match) {
+        const operationType = match[1];
+        const operationName = match[2];
+
+        // Get the precise range of the operation name
+        const nameRange = this.getGraphQLNameRange(text, mockNode.start, mockNode.end, operationType, operationName);
+
+        if (nameRange) {
+          // Check if cursor is within the name range
+          if (offset >= nameRange.start && offset <= nameRange.end) {
+            const md = this.formatGraphQLHover(text, operationType, operationName);
+            if (md) {
+              return { contents: { kind: MarkupKind.Markdown, value: md } };
+            }
+          }
+        }
       }
     }
 
@@ -419,12 +440,31 @@ export class LanguageProviders {
       const testNode = context.node as any;
       if (testNode.conditions) {
         for (const cond of testNode.conditions) {
-          if (cond.kind === 'CallAssertion' && cond.target) {
-            const match = /^(query|mutation)\s+([A-Za-z_][\w-]*)/.exec(cond.target);
-            if (match && match[2] === word) {
-              const resolverType = match[1];
-              const md = this.formatGraphQLHover(text, resolverType, word);
-              if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
+          // Check both 'kind' and 'isCallAssertion' for compatibility
+          const isCallAssertion = cond.kind === 'CallAssertion' || cond.isCallAssertion;
+          const target = cond.target || cond.callTarget;
+
+          if (isCallAssertion && target) {
+            // Call assertions use dot notation: "mutation.deleteTodo"
+            // Mocks use space notation: "mutation deleteTodo"
+            const match = /^(query|mutation)[.\s]+([A-Za-z_][\w-]*)/.exec(target);
+
+            if (match) {
+              const operationType = match[1];
+              const operationName = match[2];
+
+              // Get the precise range of the operation name
+              const nameRange = this.getGraphQLNameRange(text, testNode.start, testNode.end, operationType, operationName);
+
+              if (nameRange) {
+                // Check if cursor is within the name range
+                if (offset >= nameRange.start && offset <= nameRange.end) {
+                  const md = this.formatGraphQLHover(text, operationType, operationName);
+                  if (md) {
+                    return { contents: { kind: MarkupKind.Markdown, value: md } };
+                  }
+                }
+              }
             }
           }
         }
@@ -811,15 +851,10 @@ export class LanguageProviders {
     const type = typeMatch[1] as 'query' | 'mutation';
     const keywordEnd = typeMatch[0].length;
 
-    this.connection?.console.log(`[GraphQL Parse] Type: ${type}, keywordEnd: ${keywordEnd}`);
-    this.connection?.console.log(`[GraphQL Parse] Query after keyword: ${queryString.substring(keywordEnd, keywordEnd + 50)}`);
-
     // Find the opening brace of the selection set
     // This could be: "query {" or "query($var: Type) {"
     const selectionSetStart = queryString.indexOf('{', keywordEnd);
     if (selectionSetStart === -1) return null;
-
-    this.connection?.console.log(`[GraphQL Parse] Selection set starts at: ${selectionSetStart}`);
 
     // Extract field names from the selection set (top-level only)
     // Match: fieldName or fieldName(args)
@@ -832,16 +867,49 @@ export class LanguageProviders {
       const nameStart = queryStart + selectionSetStart + match.index + match[0].indexOf(name);
       const nameEnd = nameStart + name.length;
 
-      this.connection?.console.log(`[GraphQL Parse] Found field: ${name} at ${nameStart}-${nameEnd}, cursor at ${cursorOffset}`);
-
       // Check if cursor is within this name
       if (cursorOffset >= nameStart && cursorOffset <= nameEnd) {
-        this.connection?.console.log(`[GraphQL Parse] Cursor is on field: ${name}`);
         return { type, name };
       }
     }
 
     return null;
+  }
+
+  /**
+   * Helper to find the absolute range of the operation name within a target string
+   *
+   * Note: The AST stores targets with dot notation (e.g., "mutation.deleteTodo"),
+   * but the source code uses space notation (e.g., "mutation deleteTodo").
+   * We search for the operation name directly in the source within the node's range.
+   */
+  private getGraphQLNameRange(
+    text: string,
+    nodeStart: number,
+    nodeEnd: number,
+    operationType: string,
+    operationName: string
+  ): { start: number; end: number } | null {
+    // Extract the source text for this node
+    const nodeText = text.slice(nodeStart, nodeEnd);
+
+    // Search for the pattern "mutation operationName" or "query operationName" in the source
+    // The source uses space notation, not dot notation
+    const pattern = new RegExp(`\\b(${operationType})\\s+(${operationName})\\b`);
+    const match = pattern.exec(nodeText);
+
+    if (!match) {
+      return null;
+    }
+
+    // Calculate absolute position of the operation name
+    // match.index is where the match starts within nodeText
+    // match[0].indexOf(match[2]) gives us where the name starts within the match
+    const nameIndexInMatch = match[0].indexOf(match[2]);
+    const absoluteStart = nodeStart + match.index + nameIndexInMatch;
+    const absoluteEnd = absoluteStart + operationName.length;
+
+    return { start: absoluteStart, end: absoluteEnd };
   }
 
   /**
@@ -851,25 +919,42 @@ export class LanguageProviders {
     context: ReturnType<typeof this.getASTContext>,
     word: string,
     symbols: SymbolTable,
-    doc: TextDocument
+    doc: TextDocument,
+    offset: number
   ): Location | null {
+    const text = this.cache.getText(doc);
+
     // Handle mock context
     if (context.kind === 'mock' && context.node) {
       const mockNode = context.node as any;
-      const match = /^(query|mutation)\s+([A-Za-z_][\w-]*)/.exec(mockNode.target || '');
+      const target = mockNode.target || '';
 
-      if (match && match[2] === word) {
-        const resolverMap = match[1] === 'query'
-          ? symbols.queryPositions
-          : symbols.mutationPositions;
+      const match = /^(query|mutation)[.\s]+([A-Za-z_][\w-]*)/.exec(target);
 
-        const hit = resolverMap.get(word);
-        if (hit) {
-          const range = {
-            start: doc.positionAt(hit.start),
-            end: doc.positionAt(hit.start + hit.length)
-          };
-          return Location.create(doc.uri, range);
+      if (match) {
+        const operationType = match[1];
+        const operationName = match[2];
+
+        // Get the precise range of the operation name
+        const nameRange = this.getGraphQLNameRange(text, mockNode.start, mockNode.end, operationType, operationName);
+
+        if (nameRange) {
+          // Check if cursor is within the name range
+          if (offset >= nameRange.start && offset <= nameRange.end) {
+            const resolverMap = operationType === 'query'
+              ? symbols.queryPositions
+              : symbols.mutationPositions;
+
+            const hit = resolverMap.get(operationName);
+
+            if (hit) {
+              const range = {
+                start: doc.positionAt(hit.start),
+                end: doc.positionAt(hit.start + hit.length)
+              };
+              return Location.create(doc.uri, range);
+            }
+          }
         }
       }
     }
@@ -880,20 +965,37 @@ export class LanguageProviders {
       if (testNode.conditions) {
         for (const cond of testNode.conditions) {
           if (cond.isCallAssertion && cond.callTarget) {
-            const match = /^(query|mutation)\s+([A-Za-z_][\w-]*)/.exec(cond.callTarget);
+            const target = cond.callTarget;
 
-            if (match && match[2] === word) {
-              const resolverMap = match[1] === 'query'
-                ? symbols.queryPositions
-                : symbols.mutationPositions;
+            // Call assertions use dot notation: "mutation.deleteTodo"
+            // Mocks use space notation: "mutation deleteTodo"
+            const match = /^(query|mutation)[.\s]+([A-Za-z_][\w-]*)/.exec(target);
 
-              const hit = resolverMap.get(word);
-              if (hit) {
-                const range = {
-                  start: doc.positionAt(hit.start),
-                  end: doc.positionAt(hit.start + hit.length)
-                };
-                return Location.create(doc.uri, range);
+            if (match) {
+              const operationType = match[1];
+              const operationName = match[2];
+
+              // Get the precise range of the operation name
+              // For call assertions, we need to find where the condition starts
+              const nameRange = this.getGraphQLNameRange(text, testNode.start, testNode.end, operationType, operationName);
+
+              if (nameRange) {
+                // Check if cursor is within the name range
+                if (offset >= nameRange.start && offset <= nameRange.end) {
+                  const resolverMap = operationType === 'query'
+                    ? symbols.queryPositions
+                    : symbols.mutationPositions;
+
+                  const hit = resolverMap.get(operationName);
+
+                  if (hit) {
+                    const range = {
+                      start: doc.positionAt(hit.start),
+                      end: doc.positionAt(hit.start + hit.length)
+                    };
+                    return Location.create(doc.uri, range);
+                  }
+                }
               }
             }
           }
