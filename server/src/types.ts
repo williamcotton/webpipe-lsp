@@ -67,6 +67,14 @@ export interface SymbolTable {
   pipelinePositions: Map<string, PositionInfo>; // pipelineName -> declaration position
   testLetVariablePositions: TestLetVariablePosition[]; // test let variables with scope information
 
+  // GraphQL resolver positions
+  queryPositions: Map<string, PositionInfo>; // queryName -> declaration position
+  mutationPositions: Map<string, PositionInfo>; // mutationName -> declaration position
+
+  // GraphQL resolver references (for future find-all-references)
+  queryRefs: Map<string, Array<PositionInfo>>; // queryName -> references
+  mutationRefs: Map<string, Array<PositionInfo>>; // mutationName -> references
+
   // Handlebars symbols
   handlebars: HandlebarsSymbols;
 }

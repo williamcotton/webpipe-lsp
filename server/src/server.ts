@@ -22,7 +22,7 @@ const documentCache = new DocumentCache();
 // Initialize providers with cache
 const documentValidator = new DocumentValidator(connection, documentCache);
 const completionProvider = new CompletionProvider(documentCache);
-const languageProviders = new LanguageProviders(documentCache);
+const languageProviders = new LanguageProviders(documentCache, connection);
 const uiProviders = new UIProviders(documentCache);
 
 connection.onInitialize((_params: InitializeParams): InitializeResult => {

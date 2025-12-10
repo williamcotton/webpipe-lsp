@@ -374,3 +374,191 @@ export function collectReferencesFromAST(program: Program): ReferencePositions {
 
   return { variableRefs, pipelineRefs };
 }
+
+/**
+ * Collects all GraphQL query/mutation references from AST
+ *
+ * References can appear in:
+ * 1. graphql middleware steps: |> graphql: `query { users { id } }`
+ * 2. Test mocks: with mock query users returning `...`
+ * 3. Test call assertions: and call query users with `...`
+ */
+export function collectGraphQLReferencesFromAST(
+  program: Program,
+  text: string
+): {
+  queryRefs: Map<string, Array<{ start: number; length: number }>>;
+  mutationRefs: Map<string, Array<{ start: number; length: number }>>;
+} {
+  const queryRefs = new Map<string, Array<{ start: number; length: number }>>();
+  const mutationRefs = new Map<string, Array<{ start: number; length: number }>>();
+
+  const pushQuery = (name: string, start: number, length: number) => {
+    if (!queryRefs.has(name)) queryRefs.set(name, []);
+    queryRefs.get(name)!.push({ start, length });
+  };
+
+  const pushMutation = (name: string, start: number, length: number) => {
+    if (!mutationRefs.has(name)) mutationRefs.set(name, []);
+    mutationRefs.get(name)!.push({ start, length });
+  };
+
+  // Helper to extract operation names from GraphQL query strings
+  const extractOperations = (
+    queryString: string,
+    baseOffset: number
+  ): Array<{ name: string; type: 'query' | 'mutation'; start: number; length: number }> => {
+    const operations: Array<any> = [];
+
+    // Determine if it's a query or mutation and find where the keyword ends
+    const typeMatch = /^\s*(query|mutation)/.exec(queryString);
+    if (!typeMatch) return operations;
+
+    const type = typeMatch[1] as 'query' | 'mutation';
+    const keywordEnd = typeMatch[0].length;
+
+    // Find the opening brace of the selection set
+    // This could be: "query {" or "query($var: Type) {"
+    const selectionSetStart = queryString.indexOf('{', keywordEnd);
+    if (selectionSetStart === -1) return operations;
+
+    // Extract field names from the selection set (top-level only)
+    // Match: fieldName or fieldName(args)
+    const selectionSetContent = queryString.substring(selectionSetStart);
+    const fieldRe = /\{\s*([A-Za-z_][\w-]*)\s*[({]/g;
+    let match;
+
+    while ((match = fieldRe.exec(selectionSetContent)) !== null) {
+      const name = match[1];
+      const nameStart = baseOffset + selectionSetStart + match.index + match[0].indexOf(name);
+
+      operations.push({
+        name,
+        type,
+        start: nameStart,
+        length: name.length
+      });
+    }
+
+    return operations;
+  };
+
+  // Helper to walk through all pipelines (reused from collectReferencesFromAST)
+  function* walkPipeline(pipeline: any): any {
+    if (!pipeline || !pipeline.steps) return;
+    for (const step of pipeline.steps) {
+      yield step;
+      // Recurse into nested pipelines
+      if (step.kind === 'If') {
+        yield* walkPipeline(step.condition);
+        yield* walkPipeline(step.thenBranch);
+        if (step.elseBranch) yield* walkPipeline(step.elseBranch);
+      } else if (step.kind === 'Dispatch') {
+        for (const branch of step.branches) yield* walkPipeline(branch.pipeline);
+        if (step.default) yield* walkPipeline(step.default);
+      } else if (step.kind === 'Foreach') {
+        yield* walkPipeline(step.pipeline);
+      } else if (step.kind === 'Result') {
+        for (const branch of step.branches) yield* walkPipeline(branch.pipeline);
+      }
+    }
+  }
+
+  // 1. Collect from graphql middleware steps
+  const processPipeline = (pipeline: any) => {
+    for (const step of walkPipeline(pipeline)) {
+      if (step.kind === 'Regular' &&
+          step.name === 'graphql' &&
+          step.configType === 'backtick') {
+
+        // Find where the config string actually starts in the document
+        // The step.start is the start of the entire step (including |>)
+        const configStart = text.indexOf(step.config, step.start);
+
+        if (configStart !== -1) {
+          const operations = extractOperations(step.config, configStart);
+
+          for (const op of operations) {
+            if (op.type === 'query') {
+              pushQuery(op.name, op.start, op.length);
+            } else {
+              pushMutation(op.name, op.start, op.length);
+            }
+          }
+        }
+      }
+    }
+  };
+
+  // Process all pipelines
+  for (const route of program.routes) {
+    if (route.pipeline.kind === 'Inline') {
+      processPipeline(route.pipeline.pipeline);
+    }
+  }
+  for (const namedPipeline of program.pipelines) {
+    processPipeline(namedPipeline.pipeline);
+  }
+  for (const query of program.queries) {
+    processPipeline(query.pipeline);
+  }
+  for (const mutation of program.mutations) {
+    processPipeline(mutation.pipeline);
+  }
+  if (program.featureFlags) {
+    processPipeline(program.featureFlags);
+  }
+
+  // 2. Collect from test mocks
+  for (const describe of program.describes) {
+    const allMocks = [...describe.mocks];
+    if (describe.tests) {
+      for (const test of describe.tests) {
+        allMocks.push(...test.mocks);
+      }
+    }
+
+    for (const mock of allMocks) {
+      // Parse mock target: "query todos" or "mutation createUser"
+      const match = /^(query|mutation)\s+([A-Za-z_][\w-]*)/.exec(mock.target);
+      if (match) {
+        const type = match[1] as 'query' | 'mutation';
+        const name = match[2];
+        const nameOffset = mock.start + match[1].length + 1; // +1 for space
+
+        if (type === 'query') {
+          pushQuery(name, nameOffset, name.length);
+        } else {
+          pushMutation(name, nameOffset, name.length);
+        }
+      }
+    }
+  }
+
+  // 3. Collect from test call assertions
+  for (const describe of program.describes) {
+    if (!describe.tests) continue;
+
+    for (const test of describe.tests) {
+      for (const condition of test.conditions) {
+        if (condition.isCallAssertion && condition.callTarget) {
+          // Parse target: "query todos" or "mutation createUser"
+          const match = /^(query|mutation)\s+([A-Za-z_][\w-]*)/.exec(condition.callTarget);
+          if (match) {
+            const type = match[1] as 'query' | 'mutation';
+            const name = match[2];
+            const nameOffset = condition.start + match[1].length + 1;
+
+            if (type === 'query') {
+              pushQuery(name, nameOffset, name.length);
+            } else {
+              pushMutation(name, nameOffset, name.length);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { queryRefs, mutationRefs };
+}

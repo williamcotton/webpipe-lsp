@@ -1,7 +1,7 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import {
   Location, Position, Hover, MarkupKind, ReferenceParams,
-  HoverParams, DefinitionParams, RenameParams, WorkspaceEdit, TextEdit
+  HoverParams, DefinitionParams, RenameParams, WorkspaceEdit, TextEdit, Connection
 } from 'vscode-languageserver/node';
 import { Describe, PipelineStep } from 'webpipe-js';
 import { getWordAt, createMarkdownCodeBlock } from './utils';
@@ -17,7 +17,7 @@ import { findNodeAtOffset, ASTNode } from './ast-utils';
  * Uses centralized symbol table from DocumentCache to avoid repeated parsing.
  */
 export class LanguageProviders {
-  constructor(private cache: DocumentCache) {}
+  constructor(private cache: DocumentCache, private connection?: Connection) {}
 
   /**
    * Get AST-based context information at a given offset
@@ -25,8 +25,10 @@ export class LanguageProviders {
    */
   private getASTContext(offset: number, doc: TextDocument): {
     node: ASTNode | null;
-    kind: 'variable' | 'pipeline' | 'config' | 'route' | 'step' | 'test' | 'mock' | 'unknown';
+    kind: 'variable' | 'pipeline' | 'config' | 'route' | 'step' | 'test' | 'mock' | 'graphql' | 'unknown';
     varType?: string;
+    graphqlType?: 'query' | 'mutation';
+    graphqlName?: string;
   } {
     const program = this.cache.getProgram(doc);
     const node = findNodeAtOffset(program, offset);
@@ -49,7 +51,46 @@ export class LanguageProviders {
       return { node, kind: 'route' };
     }
     if ('kind' in node && (node as any).kind === 'Regular') {
-      return { node, kind: 'step', varType: (node as any).name };
+      const step = node as any;
+
+      // Check if we're in a GraphQL middleware step
+      if (step.name === 'graphql' && step.configType === 'backtick') {
+        this.connection?.console.log(`[GraphQL] Found graphql middleware step at offset ${offset}`);
+        this.connection?.console.log(`[GraphQL] Step config: ${step.config}`);
+        this.connection?.console.log(`[GraphQL] Step start: ${step.start}`);
+
+        // Find where the config string actually starts in the document
+        // The step.start is the start of the entire step (including |>)
+        // We need to find the opening backtick
+        const text = this.cache.getText(doc);
+        const configStart = text.indexOf(step.config, step.start);
+
+        this.connection?.console.log(`[GraphQL] Config starts at: ${configStart}`);
+
+        if (configStart === -1) {
+          this.connection?.console.log(`[GraphQL] ERROR: Could not find config in document`);
+        } else {
+          const graphqlInfo = this.getGraphQLOperationAtOffset(
+            step.config,
+            configStart,
+            offset
+          );
+
+          this.connection?.console.log(`[GraphQL] graphqlInfo: ${JSON.stringify(graphqlInfo)}`);
+
+          if (graphqlInfo) {
+            this.connection?.console.log(`[GraphQL] Detected GraphQL context: ${graphqlInfo.type} ${graphqlInfo.name}`);
+            return {
+              node,
+              kind: 'graphql',
+              graphqlType: graphqlInfo.type,
+              graphqlName: graphqlInfo.name
+            };
+          }
+        }
+      }
+
+      return { node, kind: 'step', varType: step.name };
     }
     if ('when' in node && 'conditions' in node) {
       return { node, kind: 'test' };
@@ -176,7 +217,19 @@ export class LanguageProviders {
       if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
 
-    // GraphQL query/mutation hover
+    // GraphQL resolver hover (middleware context)
+    if (context.kind === 'graphql') {
+      this.connection?.console.log(`[GraphQL Hover] Context kind is 'graphql': ${context.graphqlType} ${context.graphqlName}`);
+      const md = this.formatGraphQLHover(
+        text,
+        context.graphqlType!,
+        context.graphqlName!
+      );
+      this.connection?.console.log(`[GraphQL Hover] formatGraphQLHover result: ${md ? 'found' : 'not found'}`);
+      if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
+    }
+
+    // GraphQL query/mutation hover (mock/call assertion context)
     const graphqlHover = this.getGraphQLHoverAST(context, text, word);
     if (graphqlHover) return graphqlHover;
 
@@ -216,6 +269,26 @@ export class LanguageProviders {
         return Location.create(doc.uri, range);
       }
     }
+
+    // GraphQL resolver definition (middleware context)
+    if (context.kind === 'graphql') {
+      const resolverMap = context.graphqlType === 'query'
+        ? symbols.queryPositions
+        : symbols.mutationPositions;
+
+      const hit = resolverMap.get(context.graphqlName!);
+      if (hit) {
+        const range = {
+          start: doc.positionAt(hit.start),
+          end: doc.positionAt(hit.start + hit.length)
+        };
+        return Location.create(doc.uri, range);
+      }
+    }
+
+    // GraphQL resolver definition (mock/call assertion context)
+    const graphqlDef = this.getGraphQLDefinitionAST(context, word, symbols, doc);
+    if (graphqlDef) return graphqlDef;
 
     // Test let variable definition (Handlebars {{var}})
     const testLetDefinition = this.getTestLetVariableDefinitionAST(text, offset, word, doc);
@@ -721,6 +794,114 @@ export class LanguageProviders {
     let snippet = text.slice(start, end).trimEnd();
     if (snippet.length > 2400) snippet = snippet.slice(0, 2400) + '\n…';
     return createMarkdownCodeBlock('webpipe', snippet);
+  }
+
+  /**
+   * Determines which GraphQL operation the cursor is on within a query string
+   */
+  private getGraphQLOperationAtOffset(
+    queryString: string,
+    queryStart: number,
+    cursorOffset: number
+  ): { type: 'query' | 'mutation'; name: string } | null {
+    // Determine query vs mutation and find where the keyword ends
+    const typeMatch = /^\s*(query|mutation)/.exec(queryString);
+    if (!typeMatch) return null;
+
+    const type = typeMatch[1] as 'query' | 'mutation';
+    const keywordEnd = typeMatch[0].length;
+
+    this.connection?.console.log(`[GraphQL Parse] Type: ${type}, keywordEnd: ${keywordEnd}`);
+    this.connection?.console.log(`[GraphQL Parse] Query after keyword: ${queryString.substring(keywordEnd, keywordEnd + 50)}`);
+
+    // Find the opening brace of the selection set
+    // This could be: "query {" or "query($var: Type) {"
+    const selectionSetStart = queryString.indexOf('{', keywordEnd);
+    if (selectionSetStart === -1) return null;
+
+    this.connection?.console.log(`[GraphQL Parse] Selection set starts at: ${selectionSetStart}`);
+
+    // Extract field names from the selection set (top-level only)
+    // Match: fieldName or fieldName(args)
+    const selectionSetContent = queryString.substring(selectionSetStart);
+    const fieldRe = /\{\s*([A-Za-z_][\w-]*)\s*[({]/g;
+    let match;
+
+    while ((match = fieldRe.exec(selectionSetContent)) !== null) {
+      const name = match[1];
+      const nameStart = queryStart + selectionSetStart + match.index + match[0].indexOf(name);
+      const nameEnd = nameStart + name.length;
+
+      this.connection?.console.log(`[GraphQL Parse] Found field: ${name} at ${nameStart}-${nameEnd}, cursor at ${cursorOffset}`);
+
+      // Check if cursor is within this name
+      if (cursorOffset >= nameStart && cursorOffset <= nameEnd) {
+        this.connection?.console.log(`[GraphQL Parse] Cursor is on field: ${name}`);
+        return { type, name };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get GraphQL definition from mock or call assertion context
+   */
+  private getGraphQLDefinitionAST(
+    context: ReturnType<typeof this.getASTContext>,
+    word: string,
+    symbols: SymbolTable,
+    doc: TextDocument
+  ): Location | null {
+    // Handle mock context
+    if (context.kind === 'mock' && context.node) {
+      const mockNode = context.node as any;
+      const match = /^(query|mutation)\s+([A-Za-z_][\w-]*)/.exec(mockNode.target || '');
+
+      if (match && match[2] === word) {
+        const resolverMap = match[1] === 'query'
+          ? symbols.queryPositions
+          : symbols.mutationPositions;
+
+        const hit = resolverMap.get(word);
+        if (hit) {
+          const range = {
+            start: doc.positionAt(hit.start),
+            end: doc.positionAt(hit.start + hit.length)
+          };
+          return Location.create(doc.uri, range);
+        }
+      }
+    }
+
+    // Handle test call assertion context
+    if (context.kind === 'test' && context.node) {
+      const testNode = context.node as any;
+      if (testNode.conditions) {
+        for (const cond of testNode.conditions) {
+          if (cond.isCallAssertion && cond.callTarget) {
+            const match = /^(query|mutation)\s+([A-Za-z_][\w-]*)/.exec(cond.callTarget);
+
+            if (match && match[2] === word) {
+              const resolverMap = match[1] === 'query'
+                ? symbols.queryPositions
+                : symbols.mutationPositions;
+
+              const hit = resolverMap.get(word);
+              if (hit) {
+                const range = {
+                  start: doc.positionAt(hit.start),
+                  end: doc.positionAt(hit.start + hit.length)
+                };
+                return Location.create(doc.uri, range);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return null;
   }
 
   /**

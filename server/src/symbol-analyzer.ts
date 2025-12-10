@@ -1,7 +1,7 @@
 import { Program, TestLetVariable } from 'webpipe-js';
 import { getVariableRanges, getPipelineRanges, getTestLetVariables } from 'webpipe-js';
 import { SymbolTable, PositionInfo, TestLetVariablePosition } from './types';
-import { collectReferencesFromAST, collectHandlebarsSymbols, collectTestLetVariableReferences } from './symbol-collector';
+import { collectReferencesFromAST, collectHandlebarsSymbols, collectTestLetVariableReferences, collectGraphQLReferencesFromAST } from './symbol-collector';
 
 /**
  * Builds a complete symbol table from the parsed AST and source text.
@@ -48,8 +48,32 @@ export function buildSymbolTable(program: Program, text: string): SymbolTable {
     length: v.end - v.start
   }));
 
+  // Build GraphQL resolver positions
+  const queryPositions = new Map<string, PositionInfo>();
+  for (const query of program.queries) {
+    // The name starts after "query "
+    const nameStart = query.start + 'query '.length;
+    queryPositions.set(query.name, {
+      start: nameStart,
+      length: query.name.length
+    });
+  }
+
+  const mutationPositions = new Map<string, PositionInfo>();
+  for (const mutation of program.mutations) {
+    // The name starts after "mutation "
+    const nameStart = mutation.start + 'mutation '.length;
+    mutationPositions.set(mutation.name, {
+      start: nameStart,
+      length: mutation.name.length
+    });
+  }
+
   // Get reference positions using AST traversal (no more regex!)
   const { variableRefs, pipelineRefs } = collectReferencesFromAST(program);
+
+  // Get GraphQL resolver references
+  const { queryRefs, mutationRefs } = collectGraphQLReferencesFromAST(program, text);
 
   // Get test let variable references (scope-aware)
   const testLetVariableRefs = collectTestLetVariableReferences(text, program);
@@ -66,6 +90,10 @@ export function buildSymbolTable(program: Program, text: string): SymbolTable {
     variablePositions,
     pipelinePositions,
     testLetVariablePositions,
+    queryPositions,
+    mutationPositions,
+    queryRefs,
+    mutationRefs,
     handlebars
   };
 }
