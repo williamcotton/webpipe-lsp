@@ -167,6 +167,30 @@
           ]
         },
         {
+          "begin": "^\\s*(resolver)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\.([a-zA-Z_][a-zA-Z0-9_-]*)\\s*=",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.graphql.resolver.webpipe"
+            },
+            "2": {
+              "name": "entity.name.type.graphql.webpipe"
+            },
+            "3": {
+              "name": "entity.name.function.resolver.webpipe"
+            }
+          },
+          "end": "^(?!\\s*\\|>)(?=\\S)",
+          "name": "meta.resolver.webpipe",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#pipeline-steps"
+            }
+          ]
+        },
+        {
           "begin": "^\\s*(featureFlags)\\s*=",
           "beginCaptures": {
             "1": {

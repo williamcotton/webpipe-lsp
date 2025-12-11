@@ -215,7 +215,7 @@ export class LanguageProviders {
 
     // Pipeline hover
     if (context.kind === 'pipeline' || this.isPipelineContextAST(offset, doc)) {
-      const md = this.formatPipelineHover(text, word, symbols);
+      const md = this.formatPipelineHover(text, word, doc);
       if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
 
@@ -223,7 +223,7 @@ export class LanguageProviders {
     const variableKey = this.getVariableKeyAST(context, word);
     if (variableKey) {
       const [varType] = variableKey.split('::');
-      const md = this.formatVariableHover(text, varType, word, symbols);
+      const md = this.formatVariableHover(text, varType, word, doc);
       if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
 
@@ -232,13 +232,14 @@ export class LanguageProviders {
       const md = this.formatGraphQLHover(
         text,
         context.graphqlType!,
-        context.graphqlName!
+        context.graphqlName!,
+        doc
       );
       if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
 
     // GraphQL query/mutation hover (mock/call assertion context)
-    const graphqlHover = this.getGraphQLHoverAST(context, text, word, offset);
+    const graphqlHover = this.getGraphQLHoverAST(context, text, word, offset, doc);
     if (graphqlHover) return graphqlHover;
 
     // Handlebars partial hover
@@ -408,7 +409,7 @@ export class LanguageProviders {
   /**
    * AST-based GraphQL hover
    */
-  private getGraphQLHoverAST(context: ReturnType<typeof this.getASTContext>, text: string, word: string, offset: number): Hover | null {
+  private getGraphQLHoverAST(context: ReturnType<typeof this.getASTContext>, text: string, word: string, offset: number, doc: TextDocument): Hover | null {
     if (context.kind === 'mock' && context.node) {
       const mockNode = context.node as any;
       const target = mockNode.target || '';
@@ -426,7 +427,7 @@ export class LanguageProviders {
         if (nameRange) {
           // Check if cursor is within the name range
           if (offset >= nameRange.start && offset <= nameRange.end) {
-            const md = this.formatGraphQLHover(text, operationType, operationName);
+            const md = this.formatGraphQLHover(text, operationType, operationName, doc);
             if (md) {
               return { contents: { kind: MarkupKind.Markdown, value: md } };
             }
@@ -459,7 +460,7 @@ export class LanguageProviders {
               if (nameRange) {
                 // Check if cursor is within the name range
                 if (offset >= nameRange.start && offset <= nameRange.end) {
-                  const md = this.formatGraphQLHover(text, operationType, operationName);
+                  const md = this.formatGraphQLHover(text, operationType, operationName, doc);
                   if (md) {
                     return { contents: { kind: MarkupKind.Markdown, value: md } };
                   }
@@ -785,53 +786,37 @@ export class LanguageProviders {
     return null;
   }
 
-  private formatVariableHover(text: string, varType: string, varName: string, symbols: SymbolTable): string | null {
-    const pos = symbols.variablePositions.get(`${varType}::${varName}`);
-    if (!pos) return null;
+  private formatVariableHover(text: string, varType: string, varName: string, doc: TextDocument): string | null {
+    // Use AST to find the exact boundaries of the variable
+    const program = this.cache.getProgram(doc);
+    const variable = program.variables.find(v => v.varType === varType && v.name === varName);
+    if (!variable) return null;
 
-    // Find the end of the variable declaration (until next var/pipeline/route/etc)
-    const start = pos.start;
-    const nextDeclRe = /\n(?:(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=)|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:GET|POST|PUT|DELETE\s)|(?:describe\s))/g;
-    nextDeclRe.lastIndex = start;
-    const nextMatch = nextDeclRe.exec(text);
-    const end = nextMatch ? nextMatch.index : text.length;
-
-    let snippet = text.slice(start, end).trimEnd();
+    let snippet = text.slice(variable.start, variable.end).trimEnd();
     if (snippet.length > 2400) snippet = snippet.slice(0, 2400) + '\n…';
     return createMarkdownCodeBlock('webpipe', snippet);
   }
 
-  private formatPipelineHover(text: string, pipelineName: string, symbols: SymbolTable): string | null {
-    const pos = symbols.pipelinePositions.get(pipelineName);
-    if (!pos) return null;
+  private formatPipelineHover(text: string, pipelineName: string, doc: TextDocument): string | null {
+    // Use AST to find the exact boundaries of the pipeline
+    const program = this.cache.getProgram(doc);
+    const pipeline = program.pipelines.find(p => p.name === pipelineName);
+    if (!pipeline) return null;
 
-    // Find the end of the pipeline declaration
-    const start = pos.start;
-    const nextDeclRe = /\n(?:(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=)|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:GET|POST|PUT|DELETE\s)|(?:describe\s))/g;
-    nextDeclRe.lastIndex = start;
-    const nextMatch = nextDeclRe.exec(text);
-    const end = nextMatch ? nextMatch.index : text.length;
-
-    let snippet = text.slice(start, end).trimEnd();
+    let snippet = text.slice(pipeline.start, pipeline.end).trimEnd();
     if (snippet.length > 2400) snippet = snippet.slice(0, 2400) + '\n…';
     return createMarkdownCodeBlock('webpipe', snippet);
   }
 
-  private formatGraphQLHover(text: string, resolverType: string, resolverName: string): string | null {
-    // Find the GraphQL resolver definition: "query <name> =" or "mutation <name> ="
-    const resolverRe = new RegExp(`\\n(${resolverType}\\s+${resolverName}\\s*=)`, 'g');
-    const match = resolverRe.exec(text);
-    if (!match) return null;
+  private formatGraphQLHover(text: string, resolverType: string, resolverName: string, doc: TextDocument): string | null {
+    // Use AST to find the exact boundaries of the resolver
+    const program = this.cache.getProgram(doc);
+    const resolvers = resolverType === 'query' ? program.queries : program.mutations;
 
-    const start = match.index + 1; // Skip the newline
+    const resolver = resolvers.find(r => r.name === resolverName);
+    if (!resolver) return null;
 
-    // Find the end of the resolver declaration (until next declaration)
-    const nextDeclRe = /\n(?:(?:query|mutation)\s+[A-Za-z_][\w-]*\s*=|(?:[A-Za-z_][\w-]*\s+[A-Za-z_][\w-]*\s*=)|(?:pipeline\s+[A-Za-z_][\w-]*\s*=)|(?:GET|POST|PUT|DELETE|PATCH\s)|(?:describe\s))/g;
-    nextDeclRe.lastIndex = start;
-    const nextMatch = nextDeclRe.exec(text);
-    const end = nextMatch ? nextMatch.index : text.length;
-
-    let snippet = text.slice(start, end).trimEnd();
+    let snippet = text.slice(resolver.start, resolver.end).trimEnd();
     if (snippet.length > 2400) snippet = snippet.slice(0, 2400) + '\n…';
     return createMarkdownCodeBlock('webpipe', snippet);
   }
