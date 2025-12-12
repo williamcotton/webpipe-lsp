@@ -115,6 +115,7 @@ export function findNodeAtOffset(program: Program, offset: number): ASTNode | nu
   visit(program.graphqlSchema);
   visit(program.queries);
   visit(program.mutations);
+  visit(program.resolvers);
   visit(program.featureFlags);
 
   return mostSpecific;
@@ -187,6 +188,7 @@ export function findStackAtOffset(program: Program, offset: number): ASTNode[] {
   if (program.graphqlSchema) visit(program.graphqlSchema, []);
   visit(program.queries, []);
   visit(program.mutations, []);
+  visit(program.resolvers, []);
   if (program.featureFlags) visit(program.featureFlags, []);
 
   return stack;
@@ -236,12 +238,17 @@ export function* walkPipelineSteps(program: Program): Generator<PipelineStep> {
     yield* walkPipeline(namedPipeline.pipeline);
   }
 
-  // Walk GraphQL resolvers
+  // Walk GraphQL query/mutation resolvers
   for (const query of program.queries) {
     yield* walkPipeline(query.pipeline);
   }
   for (const mutation of program.mutations) {
     yield* walkPipeline(mutation.pipeline);
+  }
+
+  // Walk GraphQL field resolvers (e.g., resolver Team.employees)
+  for (const resolver of program.resolvers) {
+    yield* walkPipeline(resolver.pipeline);
   }
 
   // Walk feature flags
@@ -287,9 +294,11 @@ export function* walkPipelineReferences(program: Program): Generator<{ name: str
     }
   }
 
-  // Pipeline steps that reference other pipelines
+  // Pipeline steps that reference other pipelines (|> pipeline: Name or |> loader(...): Name)
   for (const step of walkPipelineSteps(program)) {
-    if (step.kind === 'Regular' && step.name === 'pipeline' && step.configType === 'identifier') {
+    if (step.kind === 'Regular' &&
+        (step.name === 'pipeline' || step.name === 'loader') &&
+        step.configType === 'identifier') {
       yield {
         name: step.config,
         offset: step.start,

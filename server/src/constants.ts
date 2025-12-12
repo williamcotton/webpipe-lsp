@@ -5,7 +5,7 @@ export const KNOWN_MIDDLEWARE = new Set([
 ]);
 
 export const KNOWN_STEPS = new Set([
-  'jq', 'pg', 'fetch', 'handlebars', 'lua', 'auth', 'cache', 'log', 'debug', 'validate', 'result', 'pipeline', 'join', 'graphql', 'rateLimit'
+  'jq', 'pg', 'fetch', 'handlebars', 'lua', 'auth', 'cache', 'log', 'debug', 'validate', 'result', 'pipeline', 'join', 'graphql', 'rateLimit', 'loader'
 ]);
 
 export const VALID_AUTH_FLOWS = new Set(['optional', 'required', 'login', 'register', 'logout']);

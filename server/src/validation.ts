@@ -237,9 +237,22 @@ export class DocumentValidator {
   }
 
   private validatePipelineReferences(text: string, pipelineNames: Set<string>, push: DiagnosticPush): void {
+    // Validate |> pipeline: Name references using regex
     const pipeRefRe = new RegExp(REGEX_PATTERNS.PIPE_REF.source, REGEX_PATTERNS.PIPE_REF.flags);
-    
+
     for (let m; (m = pipeRefRe.exec(text)); ) {
+      const name = m[2];
+      if (!pipelineNames.has(name)) {
+        const nameStart = m.index + m[0].lastIndexOf(name);
+        push(DiagnosticSeverity.Error, nameStart, nameStart + name.length, `Unknown pipeline: ${name}`);
+      }
+    }
+
+    // Validate |> loader(...): Name references
+    // Pattern: |> loader(args): PipelineName
+    const loaderRefRe = /(^|\n)\s*\|>\s*loader\([^)]*\)\s*:\s*([A-Za-z_][\w-]*)/g;
+
+    for (let m; (m = loaderRefRe.exec(text)); ) {
       const name = m[2];
       if (!pipelineNames.has(name)) {
         const nameStart = m.index + m[0].lastIndexOf(name);

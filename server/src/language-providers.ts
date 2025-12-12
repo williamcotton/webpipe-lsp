@@ -643,7 +643,11 @@ export class LanguageProviders {
     if (context.kind === 'pipeline') return true;
 
     // Check if we're in a pipeline step that references another pipeline
-    if (context.kind === 'step' && context.varType === 'pipeline') return true;
+    // This includes |> pipeline: Name and |> loader(...): Name
+    // Note: step.name is just the identifier (e.g., "loader"), args are stored separately
+    if (context.kind === 'step' && (context.varType === 'pipeline' || context.varType === 'loader')) {
+      return true;
+    }
 
     // Check if we're in a mock that mocks a pipeline
     if (context.kind === 'mock') {
@@ -664,8 +668,9 @@ export class LanguageProviders {
       return `${context.varType}::${word}`;
     }
 
-    if (context.kind === 'step' && context.varType && context.varType !== 'pipeline') {
+    if (context.kind === 'step' && context.varType && context.varType !== 'pipeline' && context.varType !== 'loader') {
       // We're at a pipeline step that references a variable
+      // Exclude 'pipeline' and 'loader' steps as they reference pipelines, not variables
       return `${context.varType}::${word}`;
     }
 

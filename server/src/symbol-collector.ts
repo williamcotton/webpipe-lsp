@@ -292,18 +292,24 @@ export function collectReferencesFromAST(program: Program): ReferencePositions {
     }
   }
 
-  // Collect variable references from pipeline steps
+  // Collect variable and pipeline references from pipeline steps
   const processPipeline = (pipeline: any) => {
     for (const step of walkPipeline(pipeline)) {
       if (step.kind === 'Regular' && step.configType === 'identifier') {
         const varName = step.config;
         const stepName = step.name;
 
-        // Calculate name offset within the step
-        // This is approximate - we know the step starts at step.start
-        // For now, use the start of the step as the reference position
-        // TODO: The parser should ideally provide separate position for the config value
-        pushVar(stepName, varName, step.start, varName.length);
+        // Use the exact position from the AST if available, otherwise fall back to step.start
+        const configPos = step.configStart ?? step.start;
+
+        // Pipeline references: |> pipeline: Name or |> loader(...): Name
+        // The step.name is just the identifier (e.g., "loader"), args are separate
+        if (stepName === 'pipeline' || stepName === 'loader') {
+          pushPipe(varName, configPos, varName.length);
+        } else {
+          // Variable references for other middleware
+          pushVar(stepName, varName, configPos, varName.length);
+        }
       }
     }
   };
@@ -324,12 +330,17 @@ export function collectReferencesFromAST(program: Program): ReferencePositions {
     processPipeline(namedPipeline.pipeline);
   }
 
-  // Process GraphQL resolvers
+  // Process GraphQL query/mutation resolvers
   for (const query of program.queries) {
     processPipeline(query.pipeline);
   }
   for (const mutation of program.mutations) {
     processPipeline(mutation.pipeline);
+  }
+
+  // Process GraphQL field resolvers (e.g., resolver Team.employees)
+  for (const resolver of program.resolvers) {
+    processPipeline(resolver.pipeline);
   }
 
   // Process feature flags
@@ -504,6 +515,9 @@ export function collectGraphQLReferencesFromAST(
   }
   for (const mutation of program.mutations) {
     processPipeline(mutation.pipeline);
+  }
+  for (const resolver of program.resolvers) {
+    processPipeline(resolver.pipeline);
   }
   if (program.featureFlags) {
     processPipeline(program.featureFlags);
