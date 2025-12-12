@@ -261,10 +261,9 @@ export class DocumentValidator {
           }
         }
 
-        // Validate unknown step names
+        // Validate unknown step names using precise AST positions
         if (!KNOWN_STEPS.has(stepName) && !KNOWN_MIDDLEWARE.has(stepName)) {
-          const nameOffset = step.start;
-          push(DiagnosticSeverity.Warning, nameOffset, nameOffset + stepName.length, `Unknown step '${stepName}'. If this is custom middleware, ignore.`);
+          push(DiagnosticSeverity.Warning, step.nameStart, step.nameEnd, `Unknown step '${stepName}'. If this is custom middleware, ignore.`);
         }
       }
 
