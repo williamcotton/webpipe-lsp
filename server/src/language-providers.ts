@@ -150,12 +150,14 @@ export class LanguageProviders {
       for (const r of refs) results.push(Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
     };
 
-    const addDeclAndRefsForVariable = (key: string) => {
+    const addDeclAndRefsForVariable = (key: { varType: string; varName: string }) => {
       if (includeDecl) {
-        const decl = symbols.variablePositions.get(key);
+        const declsByName = symbols.variablePositions.get(key.varType);
+        const decl = declsByName?.get(key.varName);
         if (decl) results.push(Location.create(doc.uri, { start: doc.positionAt(decl.start), end: doc.positionAt(decl.start + decl.length) }));
       }
-      const refs = symbols.variableRefs.get(key) || [];
+      const refsByName = symbols.variableRefs.get(key.varType);
+      const refs = refsByName?.get(key.varName) || [];
       for (const r of refs) results.push(Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
     };
 
@@ -239,8 +241,7 @@ export class LanguageProviders {
     // Variable hover
     const variableKey = this.getVariableKeyAST(context, word);
     if (variableKey) {
-      const [varType] = variableKey.split('::');
-      const md = this.formatVariableHover(text, varType, word, doc);
+      const md = this.formatVariableHover(text, variableKey.varType, word, doc);
       if (md) return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
 
@@ -289,7 +290,8 @@ export class LanguageProviders {
     // Variable definition
     const variableKey = this.getVariableKeyAST(context, word);
     if (variableKey) {
-      const hit = symbols.variablePositions.get(variableKey);
+      const declsByName = symbols.variablePositions.get(variableKey.varType);
+      const hit = declsByName?.get(variableKey.varName);
       if (hit) {
         const range = { start: doc.positionAt(hit.start), end: doc.positionAt(hit.start + hit.length) };
         return Location.create(doc.uri, range);
@@ -369,14 +371,16 @@ export class LanguageProviders {
     // Variable rename
     const variableKey = this.getVariableKeyAST(context, word);
     if (variableKey) {
-      const decl = symbols.variablePositions.get(variableKey);
+      const declsByName = symbols.variablePositions.get(variableKey.varType);
+      const decl = declsByName?.get(variableKey.varName);
       if (decl) {
         edits.push(TextEdit.replace(
           { start: doc.positionAt(decl.start), end: doc.positionAt(decl.start + decl.length) },
           newName
         ));
       }
-      const refs = symbols.variableRefs.get(variableKey) || [];
+      const refsByName = symbols.variableRefs.get(variableKey.varType);
+      const refs = refsByName?.get(variableKey.varName) || [];
       for (const r of refs) {
         edits.push(TextEdit.replace(
           { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) },
@@ -691,25 +695,25 @@ export class LanguageProviders {
 
   /**
    * AST-based version of getVariableKey
-   * Returns the variable key (varType::varName) based on AST context
+   * Returns the variable key (varType, varName) based on AST context
    */
-  private getVariableKeyAST(context: ReturnType<typeof this.getASTContext>, word: string): string | null {
+  private getVariableKeyAST(context: ReturnType<typeof this.getASTContext>, word: string): { varType: string; varName: string } | null {
     if (context.kind === 'variable' && context.varType) {
       // We're at a variable declaration or reference (includes ExecutingVariable when clauses)
-      return `${context.varType}::${word}`;
+      return { varType: context.varType, varName: word };
     }
 
     if (context.kind === 'step' && context.varType && context.varType !== 'pipeline' && context.varType !== 'loader') {
       // We're at a pipeline step that references a variable
       // Exclude 'pipeline' and 'loader' steps as they reference pipelines, not variables
-      return `${context.varType}::${word}`;
+      return { varType: context.varType, varName: word };
     }
 
     if (context.kind === 'test' && context.node) {
       // We're in a test context - check if it's executing a variable
       const testNode = context.node as any;
       if (testNode.when && testNode.when.kind === 'ExecutingVariable') {
-        return `${testNode.when.varType}::${word}`;
+        return { varType: testNode.when.varType, varName: word };
       }
     }
 
@@ -721,7 +725,7 @@ export class LanguageProviders {
         const dotIndex = mockNode.target.indexOf('.');
         if (dotIndex !== -1) {
           const varType = mockNode.target.substring(0, dotIndex);
-          return `${varType}::${word}`;
+          return { varType, varName: word };
         }
       }
     }
@@ -757,7 +761,8 @@ export class LanguageProviders {
           if (!defRange) {
             const decl = hb.declByName.get(name);
             if (decl) {
-              const fullPos = symbols.variablePositions.get(`handlebars::${name}`);
+              const handlebarsByName = symbols.variablePositions.get('handlebars');
+              const fullPos = handlebarsByName?.get(name);
               if (fullPos) defRange = { start: fullPos.start, end: fullPos.start + fullPos.length };
               else defRange = { start: decl.nameStart, end: decl.nameEnd };
               hoverLang = 'webpipe';

@@ -34,19 +34,22 @@ export class UIProviders {
     }
 
     // Variable code lenses (excluding handlebars)
-    for (const [key, pos] of symbols.variablePositions.entries()) {
-      if (key.startsWith('handlebars::')) continue;
-      const refs = symbols.variableRefs.get(key) || [];
-      const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
-      const locations = refs.map(r => Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
-      lenses.push({
-        range,
-        command: {
-          title: `${locations.length} reference${locations.length === 1 ? '' : 's'}`,
-          command: 'webpipe.showReferences',
-          arguments: [doc.uri, range.start, locations]
-        }
-      });
+    for (const [varType, byName] of symbols.variablePositions.entries()) {
+      if (varType === 'handlebars') continue;
+      for (const [varName, pos] of byName.entries()) {
+        const refsByName = symbols.variableRefs.get(varType);
+        const refs = refsByName?.get(varName) || [];
+        const range = { start: doc.positionAt(pos.start), end: doc.positionAt(pos.start + pos.length) };
+        const locations = refs.map(r => Location.create(doc.uri, { start: doc.positionAt(r.start), end: doc.positionAt(r.start + r.length) }));
+        lenses.push({
+          range,
+          command: {
+            title: `${locations.length} reference${locations.length === 1 ? '' : 's'}`,
+            command: 'webpipe.showReferences',
+            arguments: [doc.uri, range.start, locations]
+          }
+        });
+      }
     }
 
     // Test let variable code lenses
@@ -128,8 +131,10 @@ export class UIProviders {
     // Variable highlights
     const variableKey = this.getVariableKey(lineText, word);
     if (variableKey) {
-      const decl = symbols.variablePositions.get(variableKey);
-      const refs = symbols.variableRefs.get(variableKey) || [];
+      const declsByName = symbols.variablePositions.get(variableKey.varType);
+      const decl = declsByName?.get(variableKey.varName);
+      const refsByName = symbols.variableRefs.get(variableKey.varType);
+      const refs = refsByName?.get(variableKey.varName) || [];
       addRanges(decl, refs);
       return highlights.length ? highlights : null;
     }
@@ -144,28 +149,28 @@ export class UIProviders {
            /^\s*pipeline\s+[A-Za-z_][\w-]*\s*=/.test(lineText);
   }
 
-  private getVariableKey(lineText: string, word: string): string | null {
+  private getVariableKey(lineText: string, word: string): { varType: string; varName: string } | null {
     let m: RegExpExecArray | null;
-    
+
     if ((m = /^\s*([A-Za-z_][\w-]*)\s+([A-Za-z_][\w-]*)\s*=\s*`/.exec(lineText))) {
       const varType = m[1];
       const varName = m[2];
-      if (word === varName) return `${varType}::${varName}`;
+      if (word === varName) return { varType, varName };
     }
-    
-    if (/^\s*\|>\s*([A-Za-z_][\w-]*)\s*:/.test(lineText) || 
-        /^\s*when\s+executing\s+variable\s+/.test(lineText) || 
+
+    if (/^\s*\|>\s*([A-Za-z_][\w-]*)\s*:/.test(lineText) ||
+        /^\s*when\s+executing\s+variable\s+/.test(lineText) ||
          /^\s*(with|and)\s+mock\s+[A-Za-z_][\w-]*\./.test(lineText)) {
-      
+
       const stepTypeMatch = /^\s*\|>\s*([A-Za-z_][\w-]*)\s*:/.exec(lineText);
       const execVarMatch = /^\s*when\s+executing\s+variable\s+([A-Za-z_][\w-]*)\s+/.exec(lineText);
       const mockTypeMatch = /^\s*(with|and)\s+mock\s+([A-Za-z_][\w-]*)\./.exec(lineText);
-      
-      const varType = (stepTypeMatch && stepTypeMatch[1] !== 'pipeline') ? stepTypeMatch[1] : 
-                     (execVarMatch ? execVarMatch[1] : 
+
+      const varType = (stepTypeMatch && stepTypeMatch[1] !== 'pipeline') ? stepTypeMatch[1] :
+                     (execVarMatch ? execVarMatch[1] :
                      (mockTypeMatch ? mockTypeMatch[2] : undefined));
-      
-      if (varType) return `${varType}::${word}`;
+
+      if (varType) return { varType, varName: word };
     }
 
     return null;

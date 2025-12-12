@@ -257,13 +257,18 @@ export function filterReferencesInScope(
  * Uses the parsed AST to find all variable and pipeline references
  */
 export function collectReferencesFromAST(program: Program): ReferencePositions {
-  const variableRefs = new Map<string, Array<{ start: number; length: number }>>();
+  const variableRefs = new Map<string, Map<string, Array<{ start: number; length: number }>>>();
   const pipelineRefs = new Map<string, Array<{ start: number; length: number }>>();
 
   const pushVar = (varType: string, varName: string, start: number, length: number) => {
-    const key = `${varType}::${varName}`;
-    if (!variableRefs.has(key)) variableRefs.set(key, []);
-    variableRefs.get(key)!.push({ start, length });
+    if (!variableRefs.has(varType)) {
+      variableRefs.set(varType, new Map());
+    }
+    const byName = variableRefs.get(varType)!;
+    if (!byName.has(varName)) {
+      byName.set(varName, []);
+    }
+    byName.get(varName)!.push({ start, length });
   };
 
   const pushPipe = (name: string, start: number, length: number) => {

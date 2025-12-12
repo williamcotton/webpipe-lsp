@@ -27,7 +27,7 @@ export interface DeclarationPositions {
 }
 
 export interface ReferencePositions {
-  variableRefs: Map<string, Array<PositionInfo>>;
+  variableRefs: Map<string, Map<string, Array<PositionInfo>>>; // varType -> varName -> references
   pipelineRefs: Map<string, Array<PositionInfo>>;
 }
 
@@ -57,13 +57,13 @@ export interface SymbolTable {
   variables: Map<string, Set<string>>; // varType -> Set of varNames
   pipelines: Set<string>; // pipeline names
 
-  // Reference positions (from regex analysis, to be migrated to AST)
-  variableRefs: Map<string, Array<PositionInfo>>; // "varType::varName" -> references
+  // Reference positions (AST-based)
+  variableRefs: Map<string, Map<string, Array<PositionInfo>>>; // varType -> varName -> references
   pipelineRefs: Map<string, Array<PositionInfo>>; // pipelineName -> references
   testLetVariableRefs: Map<string, Array<PositionInfo>>; // test let varName -> references
 
   // Declaration positions (from webpipe-js utilities)
-  variablePositions: Map<string, PositionInfo>; // "varType::varName" -> declaration position
+  variablePositions: Map<string, Map<string, PositionInfo>>; // varType -> varName -> declaration position
   pipelinePositions: Map<string, PositionInfo>; // pipelineName -> declaration position
   testLetVariablePositions: TestLetVariablePosition[]; // test let variables with scope information
 

@@ -30,9 +30,13 @@ export function buildSymbolTable(program: Program, text: string): SymbolTable {
   const pipelineRanges = getPipelineRanges(text);
   const testLetVariables = getTestLetVariables(text);
 
-  const variablePositions = new Map<string, PositionInfo>();
-  for (const [key, r] of variableRanges.entries()) {
-    variablePositions.set(key, { start: r.start, length: r.end - r.start });
+  const variablePositions = new Map<string, Map<string, PositionInfo>>();
+  for (const [varType, byName] of variableRanges.entries()) {
+    const positionsByName = new Map<string, PositionInfo>();
+    for (const [varName, r] of byName.entries()) {
+      positionsByName.set(varName, { start: r.start, length: r.end - r.start });
+    }
+    variablePositions.set(varType, positionsByName);
   }
 
   const pipelinePositions = new Map<string, PositionInfo>();
