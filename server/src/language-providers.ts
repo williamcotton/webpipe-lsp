@@ -152,7 +152,7 @@ export class LanguageProviders {
     }
 
     // Variable references
-    const variableKey = this.getVariableKeyAST(context, word);
+    const variableKey = this.getVariableKeyAST(context, word, offset, doc);
     if (variableKey) {
       addDeclAndRefsForVariable(variableKey);
       return results.length ? results : null;
@@ -220,7 +220,7 @@ export class LanguageProviders {
     }
 
     // Variable hover
-    const variableKey = this.getVariableKeyAST(context, word);
+    const variableKey = this.getVariableKeyAST(context, word, offset, doc);
     if (variableKey) {
       const [varType] = variableKey.split('::');
       const md = this.formatVariableHover(text, varType, word, doc);
@@ -270,7 +270,7 @@ export class LanguageProviders {
     }
 
     // Variable definition
-    const variableKey = this.getVariableKeyAST(context, word);
+    const variableKey = this.getVariableKeyAST(context, word, offset, doc);
     if (variableKey) {
       const hit = symbols.variablePositions.get(variableKey);
       if (hit) {
@@ -350,7 +350,7 @@ export class LanguageProviders {
     }
 
     // Variable rename
-    const variableKey = this.getVariableKeyAST(context, word);
+    const variableKey = this.getVariableKeyAST(context, word, offset, doc);
     if (variableKey) {
       const decl = symbols.variablePositions.get(variableKey);
       if (decl) {
@@ -655,6 +655,20 @@ export class LanguageProviders {
       if (mockNode.target && mockNode.target.startsWith('pipeline ')) return true;
     }
 
+    // Check if we're in a test when clause that executes a pipeline
+    const program = this.cache.getProgram(doc);
+    for (const describe of program.describes) {
+      for (const test of describe.tests) {
+        const when = test.when;
+        if (when.kind === 'ExecutingPipeline') {
+          // Check if offset is within the pipeline name in the when clause
+          if (offset >= when.nameStart && offset < when.nameStart + when.name.length) {
+            return true;
+          }
+        }
+      }
+    }
+
     return false;
   }
 
@@ -662,7 +676,7 @@ export class LanguageProviders {
    * AST-based version of getVariableKey
    * Returns the variable key (varType::varName) based on AST context
    */
-  private getVariableKeyAST(context: ReturnType<typeof this.getASTContext>, word: string): string | null {
+  private getVariableKeyAST(context: ReturnType<typeof this.getASTContext>, word: string, offset?: number, doc?: TextDocument): string | null {
     if (context.kind === 'variable' && context.varType) {
       // We're at a variable declaration
       return `${context.varType}::${word}`;
@@ -691,6 +705,22 @@ export class LanguageProviders {
         if (dotIndex !== -1) {
           const varType = mockNode.target.substring(0, dotIndex);
           return `${varType}::${word}`;
+        }
+      }
+    }
+
+    // Check if we're in a test when clause that executes a variable
+    if (offset !== undefined && doc) {
+      const program = this.cache.getProgram(doc);
+      for (const describe of program.describes) {
+        for (const test of describe.tests) {
+          const when = test.when;
+          if (when.kind === 'ExecutingVariable') {
+            // Check if offset is within the variable name in the when clause
+            if (offset >= when.nameStart && offset < when.nameStart + when.name.length) {
+              return `${when.varType}::${when.name}`;
+            }
+          }
         }
       }
     }

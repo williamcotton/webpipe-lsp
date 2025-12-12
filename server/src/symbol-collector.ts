@@ -354,9 +354,9 @@ export function collectReferencesFromAST(program: Program): ReferencePositions {
       // Check when clauses
       const when = test.when;
       if (when.kind === 'ExecutingPipeline') {
-        pushPipe(when.name, when.start, when.name.length);
+        pushPipe(when.name, when.nameStart, when.name.length);
       } else if (when.kind === 'ExecutingVariable') {
-        pushVar(when.varType, when.name, when.start, when.name.length);
+        pushVar(when.varType, when.name, when.nameStart, when.name.length);
       }
 
       // Check mocks (both describe-level and test-level)
@@ -370,13 +370,21 @@ export function collectReferencesFromAST(program: Program): ReferencePositions {
             continue;
           } else {
             // Variable mock: type.name
-            pushVar(type, name, mock.start, name.length);
+            // mock.targetStart points to the beginning of the target (e.g., "pg" in "pg.teamsQuery")
+            // We need to find the position after the dot
+            const dotIndex = mock.target.indexOf('.');
+            if (dotIndex !== -1) {
+              const nameStart = mock.targetStart + dotIndex + 1;
+              pushVar(type, name, nameStart, name.length);
+            }
           }
         } else {
           // Could be a pipeline reference
           if (mock.target.startsWith('pipeline ')) {
             const pipelineName = mock.target.substring('pipeline '.length);
-            pushPipe(pipelineName, mock.start, pipelineName.length);
+            // mock.targetStart points to "pipeline", we need to skip past "pipeline "
+            const nameStart = mock.targetStart + 'pipeline '.length;
+            pushPipe(pipelineName, nameStart, pipelineName.length);
           }
         }
       }

@@ -312,7 +312,7 @@ export function* walkPipelineReferences(program: Program): Generator<{ name: str
       if (test.when.kind === 'ExecutingPipeline') {
         yield {
           name: test.when.name,
-          offset: test.when.start,
+          offset: test.when.nameStart,
         };
       }
     }
