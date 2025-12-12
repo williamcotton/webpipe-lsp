@@ -1,10 +1,11 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Diagnostic, DiagnosticSeverity, Connection } from 'vscode-languageserver/node';
-import { VALID_HTTP_METHODS, KNOWN_MIDDLEWARE, KNOWN_STEPS, REGEX_PATTERNS } from './constants';
+import { VALID_HTTP_METHODS, KNOWN_MIDDLEWARE, KNOWN_STEPS } from './constants';
 import { collectHandlebarsSymbols } from './symbol-collector';
 import { DocumentCache } from './document-cache';
-import { Describe } from 'webpipe-js';
+import { Describe, Variable, NamedPipeline, PipelineStep, Program } from 'webpipe-js';
 import { findTestContextAtOffset, extractHandlebarsVariables, extractJqVariables, escapeRegex } from './test-variable-utils';
+import { walkPipelineSteps } from './ast-utils';
 
 interface DiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
@@ -59,24 +60,25 @@ export class DocumentValidator {
         );
       }
 
-      const { variablesByType, pipelineNames } = this.collectDeclarations(text, push, program);
-      const routePatterns = this.validateRoutes(text, push, program);
-      
-      this.validateStepReferences(text, variablesByType, push);
-      this.validatePipelineReferences(text, pipelineNames, push);
-      this.validateBDDReferences(text, variablesByType, pipelineNames, push);
-      this.validateMockReferences(text, variablesByType, pipelineNames, push);
-      this.validateRouteReferences(text, routePatterns, push);
+      const { variablesByType, pipelineNames } = this.collectDeclarations(push, program);
+      const routePatterns = this.validateRoutes(push, program);
+
+      // Unified AST-based step validation (includes auth flows, result blocks, variable/pipeline refs, unknown steps)
+      this.validatePipelineSteps(program, variablesByType, pipelineNames, push);
+
+      // Unified AST-based BDD validation (replaces regex-based when clause validation)
+      this.validateBDDReferences(program, variablesByType, pipelineNames, routePatterns, push);
+
+      // Unified AST-based mock validation
+      this.validateMockReferences(program, variablesByType, pipelineNames, push);
+
       this.validateJsonBlocks(text, push);
       this.validateMiddlewareReferences(text, push);
       this.validateConfigBlocks(text, push, program);
       this.validateUnknownVariableTypes(text, push, program);
-      this.validateAuthFlows(text, push);
-      this.validateResultBlocks(text, push);
       this.validateAssertions(text, push);
-      this.validateUnknownSteps(text, push);
       this.validateHandlebarsPartialReferences(text, push, program);
-      this.validateJoinAsyncReferences(text, push);
+      this.validateJoinAsyncReferences(program, text, push);
       this.validateTestLetVariables(text, push, program);
 
     } catch (e) {
@@ -134,7 +136,7 @@ export class DocumentValidator {
     }
   }
 
-  private collectDeclarations(text: string, push: DiagnosticPush, program?: { variables: Array<{ varType: string; name: string; start: number; end: number }>; pipelines: Array<{ name: string; start: number; end: number }> }): {
+  private collectDeclarations(push: DiagnosticPush, program?: Program): {
     variablesByType: Map<string, Set<string>>;
     pipelineNames: Set<string>;
   } {
@@ -143,39 +145,41 @@ export class DocumentValidator {
 
     if (!program) return { variablesByType, pipelineNames };
 
-    // Use AST to build declarations and detect duplicates
-    const varDeclSeen = new Map<string, { varType: string; name: string; start: number; end: number }>();
+    // Build variable declarations from AST and detect duplicates
+    const varDeclByKey = new Map<string, Variable>();
     for (const v of program.variables) {
-      if (!variablesByType.has(v.varType)) variablesByType.set(v.varType, new Set());
+      if (!variablesByType.has(v.varType)) {
+        variablesByType.set(v.varType, new Set());
+      }
       variablesByType.get(v.varType)!.add(v.name);
 
-      // Check for duplicates
+      // Check for duplicates using a composite key
       const key = `${v.varType}::${v.name}`;
-      if (varDeclSeen.has(key)) {
-        // This is a duplicate - report it
+      if (varDeclByKey.has(key)) {
+        // Duplicate found - calculate position of the name within the declaration
         const nameStart = v.start + v.varType.length + 1; // skip "varType "
         push(DiagnosticSeverity.Warning, nameStart, nameStart + v.name.length, `Duplicate ${v.varType} variable: ${v.name}`);
       }
-      varDeclSeen.set(key, v);
+      varDeclByKey.set(key, v);
     }
 
-    const pipelineSeen = new Map<string, { name: string; start: number; end: number }>();
+    // Build pipeline declarations from AST and detect duplicates
+    const pipelineDeclByName = new Map<string, NamedPipeline>();
     for (const p of program.pipelines) {
       pipelineNames.add(p.name);
 
-      // Check for duplicates
-      if (pipelineSeen.has(p.name)) {
-        // This is a duplicate - report it
+      if (pipelineDeclByName.has(p.name)) {
+        // Duplicate found
         const nameStart = p.start + 'pipeline '.length;
         push(DiagnosticSeverity.Warning, nameStart, nameStart + p.name.length, `Duplicate pipeline: ${p.name}`);
       }
-      pipelineSeen.set(p.name, p);
+      pipelineDeclByName.set(p.name, p);
     }
 
     return { variablesByType, pipelineNames };
   }
 
-  private validateRoutes(text: string, push: DiagnosticPush, program?: { routes: Array<{ method: string; path: string; start: number; end: number }> }): Array<{ method: string; path: string; regex: RegExp }> {
+  private validateRoutes(push: DiagnosticPush, program?: Program): Array<{ method: string; path: string; regex: RegExp }> {
     const routePatterns: Array<{ method: string; path: string; regex: RegExp }> = [];
 
     if (!program) return routePatterns;
@@ -211,110 +215,142 @@ export class DocumentValidator {
         // Ignore bad pattern
       }
     }
-    
+
     return routePatterns;
   }
 
-  private validateStepReferences(text: string, variablesByType: Map<string, Set<string>>, push: DiagnosticPush): void {
-    const stepRefRe = new RegExp(REGEX_PATTERNS.STEP_REF.source, REGEX_PATTERNS.STEP_REF.flags);
-    
-    for (let m; (m = stepRefRe.exec(text)); ) {
-      const stepName = m[2];
-      const configText = m[3].trim();
-      
-      if (stepName === 'pipeline') continue;
-      
-      const identMatch = REGEX_PATTERNS.SINGLE_IDENTIFIER.exec(configText);
-      if (!identMatch) continue;
-      
-      const id = identMatch.groups!.id;
-      const declared = variablesByType.get(stepName);
-      if (!declared || !declared.has(id)) {
-        const idStart = m.index + m[0].lastIndexOf(id);
-        push(DiagnosticSeverity.Error, idStart, idStart + id.length, `Unknown ${stepName} variable: ${id}`);
+  /**
+   * Validates all pipeline steps using AST traversal.
+   * Checks: variable references, pipeline references, unknown step names, auth flows, and result branches.
+   */
+  private validatePipelineSteps(program: Program, variablesByType: Map<string, Set<string>>, pipelineNames: Set<string>, push: DiagnosticPush): void {
+    for (const step of walkPipelineSteps(program)) {
+      // Handle Regular steps
+      if (step.kind === 'Regular') {
+        const stepName = step.name;
+
+        // Validate pipeline references (|> pipeline: Name or |> loader(...): Name)
+        if (stepName === 'pipeline' || stepName === 'loader') {
+          if (step.configType === 'identifier') {
+            const name = step.config;
+            if (!pipelineNames.has(name)) {
+              const configStart = step.configStart ?? step.start;
+              push(DiagnosticSeverity.Error, configStart, configStart + name.length, `Unknown pipeline: ${name}`);
+            }
+          }
+          continue;
+        }
+
+        // Validate auth flow configurations
+        if (stepName === 'auth' && step.configType === 'quoted') {
+          const flow = step.config;
+          const ok = flow === 'optional' || flow === 'required' || flow === 'login' || flow === 'register' || flow === 'logout' || flow.startsWith('type:');
+          if (!ok) {
+            const configStart = step.configStart ?? step.start;
+            push(DiagnosticSeverity.Warning, configStart, configStart + flow.length, `Unknown auth flow: ${flow}`);
+          }
+        }
+
+        // Validate variable references (|> pg: myQuery)
+        if (step.configType === 'identifier') {
+          const varName = step.config;
+          const declared = variablesByType.get(stepName);
+          if (!declared || !declared.has(varName)) {
+            const configStart = step.configStart ?? step.start;
+            push(DiagnosticSeverity.Error, configStart, configStart + varName.length, `Unknown ${stepName} variable: ${varName}`);
+          }
+        }
+
+        // Validate unknown step names
+        if (!KNOWN_STEPS.has(stepName) && !KNOWN_MIDDLEWARE.has(stepName)) {
+          const nameOffset = step.start;
+          push(DiagnosticSeverity.Warning, nameOffset, nameOffset + stepName.length, `Unknown step '${stepName}'. If this is custom middleware, ignore.`);
+        }
+      }
+
+      // Handle Result steps - validate status codes and check for duplicate branch types
+      else if (step.kind === 'Result') {
+        const seenTypes = new Set<string>();
+        for (const branch of step.branches) {
+          const status = branch.statusCode;
+
+          // Validate status code range
+          if (status < 100 || status > 599) {
+            push(DiagnosticSeverity.Error, branch.start, branch.start + String(status).length, `Invalid HTTP status code: ${status}`);
+          }
+
+          // Check for duplicate branch types
+          if (branch.branchType.kind === 'Custom') {
+            const typeName = branch.branchType.name;
+            if (seenTypes.has(typeName)) {
+              push(DiagnosticSeverity.Warning, branch.start, branch.start + typeName.length, `Duplicate result branch type: ${typeName}`);
+            }
+            seenTypes.add(typeName);
+          } else if (branch.branchType.kind === 'Ok') {
+            if (seenTypes.has('Ok')) {
+              push(DiagnosticSeverity.Warning, branch.start, branch.end, 'Duplicate result branch type: Ok');
+            }
+            seenTypes.add('Ok');
+          }
+        }
       }
     }
   }
 
-  private validatePipelineReferences(text: string, pipelineNames: Set<string>, push: DiagnosticPush): void {
-    // Validate |> pipeline: Name references using regex
-    const pipeRefRe = new RegExp(REGEX_PATTERNS.PIPE_REF.source, REGEX_PATTERNS.PIPE_REF.flags);
+  /**
+   * Validates test 'when' clauses using AST.
+   */
+  private validateBDDReferences(program: Program, variablesByType: Map<string, Set<string>>, pipelineNames: Set<string>, routePatterns: Array<{ method: string; path: string; regex: RegExp }>, push: DiagnosticPush): void {
+    if (!program) return;
 
-    for (let m; (m = pipeRefRe.exec(text)); ) {
-      const name = m[2];
-      if (!pipelineNames.has(name)) {
-        const nameStart = m.index + m[0].lastIndexOf(name);
-        push(DiagnosticSeverity.Error, nameStart, nameStart + name.length, `Unknown pipeline: ${name}`);
-      }
-    }
+    for (const describe of program.describes) {
+      for (const test of describe.tests) {
+        const when = test.when;
 
-    // Validate |> loader(...): Name references
-    // Pattern: |> loader(args): PipelineName
-    const loaderRefRe = /(^|\n)\s*\|>\s*loader\([^)]*\)\s*:\s*([A-Za-z_][\w-]*)/g;
+        if (when.kind === 'ExecutingPipeline') {
+          // Validate: when executing pipeline <name>
+          if (!pipelineNames.has(when.name)) {
+            push(DiagnosticSeverity.Error, when.nameStart, when.nameStart + when.name.length, `Unknown pipeline: ${when.name}`);
+          }
+        } else if (when.kind === 'ExecutingVariable') {
+          // Validate: when executing variable <type> <name>
+          const declared = variablesByType.get(when.varType);
+          if (!declared || !declared.has(when.name)) {
+            push(DiagnosticSeverity.Error, when.nameStart, when.nameStart + when.name.length, `Unknown ${when.varType} variable: ${when.name}`);
+          }
+        } else if (when.kind === 'CallingRoute') {
+          // Validate: when calling METHOD /path
+          if (!VALID_HTTP_METHODS.has(when.method)) {
+            // Use precise method position from AST
+            push(DiagnosticSeverity.Error, when.methodStart, when.methodStart + when.method.length, `Unknown HTTP method: ${when.method}`);
+          }
 
-    for (let m; (m = loaderRefRe.exec(text)); ) {
-      const name = m[2];
-      if (!pipelineNames.has(name)) {
-        const nameStart = m.index + m[0].lastIndexOf(name);
-        push(DiagnosticSeverity.Error, nameStart, nameStart + name.length, `Unknown pipeline: ${name}`);
-      }
-    }
-  }
-
-  private validateBDDReferences(text: string, variablesByType: Map<string, Set<string>>, pipelineNames: Set<string>, push: DiagnosticPush): void {
-    // when executing pipeline <name>
-    const whenExecPipelineRe = /(^|\n)\s*when\s+executing\s+pipeline\s+([A-Za-z_][\w-]*)/g;
-    for (let m; (m = whenExecPipelineRe.exec(text)); ) {
-      const name = m[2];
-      if (!pipelineNames.has(name)) {
-        const nameStart = m.index + m[0].lastIndexOf(name);
-        push(DiagnosticSeverity.Error, nameStart, nameStart + name.length, `Unknown pipeline: ${name}`);
-      }
-    }
-
-    // when executing variable <type> <name>
-    const whenExecVarRe = /(^|\n)\s*when\s+executing\s+variable\s+([A-Za-z_][\w-]*)\s+([A-Za-z_][\w-]*)/g;
-    for (let m; (m = whenExecVarRe.exec(text)); ) {
-      const varType = m[2];
-      const varName = m[3];
-      const declared = variablesByType.get(varType);
-      if (!declared || !declared.has(varName)) {
-        const nameStart = m.index + m[0].lastIndexOf(varName);
-        push(DiagnosticSeverity.Error, nameStart, nameStart + varName.length, `Unknown ${varType} variable: ${varName}`);
-      }
-    }
-
-    // when calling METHOD /path
-    const whenCallingRe = /(^|\n)\s*when\s+calling\s+([A-Z]+)\s+([^\s\n]+)/g;
-    for (let m; (m = whenCallingRe.exec(text)); ) {
-      const method = m[2];
-      if (!VALID_HTTP_METHODS.has(method)) {
-        const methodStart = m.index + m[0].indexOf(method);
-        push(DiagnosticSeverity.Error, methodStart, methodStart + method.length, `Unknown HTTP method: ${method}`);
+          // Validate route exists
+          const path = when.path.split('?')[0];
+          const anyMatch = routePatterns.some(r => r.method === when.method && r.regex.test(path));
+          if (!anyMatch) {
+            // Use precise path position from AST
+            push(DiagnosticSeverity.Error, when.pathStart, when.pathStart + path.length, `Unknown route: ${when.method} ${path}`);
+          }
+        }
       }
     }
   }
 
-  private validateMockReferences(text: string, variablesByType: Map<string, Set<string>>, pipelineNames: Set<string>, push: DiagnosticPush): void {
-    // Mock pipeline references
-    const mockPipelineRe = /(^|\n)\s*(?:with|and)\s+mock\s+pipeline\s+([A-Za-z_][\w-]*)\s+returning\s+`/g;
-    for (let m; (m = mockPipelineRe.exec(text)); ) {
-      const name = m[2];
-      if (!pipelineNames.has(name)) {
-        const nameStart = m.index + m[0].lastIndexOf(name);
-        push(DiagnosticSeverity.Error, nameStart, nameStart + name.length, `Unknown pipeline in mock: ${name}`);
-      }
-    }
+  /**
+   * Validates mock references using AST.
+   * Builds GraphQL schema info from AST, then validates all mocks in tests.
+   */
+  private validateMockReferences(program: Program, variablesByType: Map<string, Set<string>>, pipelineNames: Set<string>, push: DiagnosticPush): void {
+    if (!program) return;
 
-    // Extract GraphQL schema for validation
-    const graphqlSchemaMatch = /graphqlSchema\s*=\s*`([\s\S]*?)`/m.exec(text);
+    // Build GraphQL resolver sets from AST
     const queries = new Set<string>();
     const mutations = new Set<string>();
 
-    if (graphqlSchemaMatch) {
-      const schema = graphqlSchemaMatch[1];
-
-      // Extract query names from schema
+    // Extract from GraphQL schema if present
+    if (program.graphqlSchema) {
+      const schema = program.graphqlSchema.sdl;
       const queryTypeMatch = /type\s+Query\s*\{([^}]*)\}/s.exec(schema);
       if (queryTypeMatch) {
         const queryFields = queryTypeMatch[1].matchAll(/\s*([A-Za-z_][\w-]*)\s*(?:\([^)]*\))?\s*:\s*/g);
@@ -323,7 +359,6 @@ export class DocumentValidator {
         }
       }
 
-      // Extract mutation names from schema
       const mutationTypeMatch = /type\s+Mutation\s*\{([^}]*)\}/s.exec(schema);
       if (mutationTypeMatch) {
         const mutationFields = mutationTypeMatch[1].matchAll(/\s*([A-Za-z_][\w-]*)\s*(?:\([^)]*\))?\s*:\s*/g);
@@ -333,64 +368,87 @@ export class DocumentValidator {
       }
     }
 
-    // Also check for query/mutation resolver definitions
-    const queryResolverRe = /query\s+([A-Za-z_][\w-]*)\s*=/g;
-    for (let m; (m = queryResolverRe.exec(text)); ) {
-      queries.add(m[1]);
+    // Add query and mutation resolvers from AST
+    for (const query of program.queries) {
+      queries.add(query.name);
+    }
+    for (const mutation of program.mutations) {
+      mutations.add(mutation.name);
     }
 
-    const mutationResolverRe = /mutation\s+([A-Za-z_][\w-]*)\s*=/g;
-    for (let m; (m = mutationResolverRe.exec(text)); ) {
-      mutations.add(m[1]);
-    }
-
-    // Mock GraphQL query/mutation references (query users, mutation createUser)
-    const mockGraphQLRe = /(^|\n)\s*(?:with|and)\s+mock\s+(query|mutation)\s+([A-Za-z_][\w-]*)\s+returning\s+`/g;
-    for (let m; (m = mockGraphQLRe.exec(text)); ) {
-      const type = m[2];
-      const name = m[3];
-      const resolverSet = type === 'query' ? queries : mutations;
-
-      // Only validate if we have schema/resolver information
-      if (resolverSet.size > 0 && !resolverSet.has(name)) {
-        const nameStart = m.index + m[0].lastIndexOf(name);
-        push(DiagnosticSeverity.Warning, nameStart, nameStart + name.length, `Unknown GraphQL ${type} in mock: ${name}`);
-      }
-    }
-
-    // Mock variable references
-    const mockVarRe = /(^|\n)\s*(?:with|and)\s+mock\s+([A-Za-z_][\w-]*)\.([A-Za-z_][\w-]*)\s+returning\s+`/g;
-    for (let m; (m = mockVarRe.exec(text)); ) {
-      const varType = m[2];
-      const varName = m[3];
-
-      // Skip GraphQL mocks (query.users, mutation.createUser)
-      if (varType === 'query' || varType === 'mutation') {
-        continue;
+    // Validate mocks in all tests
+    for (const describe of program.describes) {
+      // Validate describe-level mocks
+      for (const mock of describe.mocks) {
+        this.validateMock(mock, variablesByType, pipelineNames, queries, mutations, push);
       }
 
-      const declared = variablesByType.get(varType);
-      if (!declared || !declared.has(varName)) {
-        const nameStart = m.index + m[0].lastIndexOf(varName);
-        push(DiagnosticSeverity.Error, nameStart, nameStart + varName.length, `Unknown ${varType} variable in mock: ${varName}`);
+      // Validate test-level mocks
+      for (const test of describe.tests) {
+        for (const mock of test.mocks) {
+          this.validateMock(mock, variablesByType, pipelineNames, queries, mutations, push);
+        }
       }
     }
   }
 
-  private validateRouteReferences(text: string, routePatterns: Array<{ method: string; path: string; regex: RegExp }>, push: DiagnosticPush): void {
-    const whenCallingRe = /(^|\n)\s*when\s+calling\s+([A-Z]+)\s+([^\s\n]+)/g;
-    
-    for (let m; (m = whenCallingRe.exec(text)); ) {
-      const method = m[2];
-      const pathWithQuery = m[3];
-      const path = pathWithQuery.split('?')[0];
-      
-      if (!VALID_HTTP_METHODS.has(method)) continue;
-      
-      const anyMatch = routePatterns.some(r => r.method === method && r.regex.test(path));
-      if (!anyMatch) {
-        const pathStart = m.index + m[0].lastIndexOf(path);
-        push(DiagnosticSeverity.Error, pathStart, pathStart + path.length, `Unknown route: ${method} ${path}`);
+  /**
+   * Validates a single mock target.
+   * Target formats:
+   * - "pipeline Name"
+   * - "query name" or "mutation name"
+   * - "type.name"
+   */
+  private validateMock(
+    mock: { target: string; targetStart: number; returnValue: string; start: number; end: number },
+    variablesByType: Map<string, Set<string>>,
+    pipelineNames: Set<string>,
+    queries: Set<string>,
+    mutations: Set<string>,
+    push: DiagnosticPush
+  ): void {
+    const target = mock.target;
+
+    // Mock pipeline: "pipeline Name"
+    if (target.startsWith('pipeline ')) {
+      const name = target.substring('pipeline '.length);
+      if (!pipelineNames.has(name)) {
+        push(DiagnosticSeverity.Error, mock.targetStart + 'pipeline '.length, mock.targetStart + target.length, `Unknown pipeline in mock: ${name}`);
+      }
+      return;
+    }
+
+    // Mock GraphQL: "query name" or "mutation name"
+    if (target.startsWith('query ')) {
+      const name = target.substring('query '.length);
+      if (queries.size > 0 && !queries.has(name)) {
+        push(DiagnosticSeverity.Warning, mock.targetStart + 'query '.length, mock.targetStart + target.length, `Unknown GraphQL query in mock: ${name}`);
+      }
+      return;
+    }
+
+    if (target.startsWith('mutation ')) {
+      const name = target.substring('mutation '.length);
+      if (mutations.size > 0 && !mutations.has(name)) {
+        push(DiagnosticSeverity.Warning, mock.targetStart + 'mutation '.length, mock.targetStart + target.length, `Unknown GraphQL mutation in mock: ${name}`);
+      }
+      return;
+    }
+
+    // Mock variable: "type.name"
+    const dotIndex = target.indexOf('.');
+    if (dotIndex > 0) {
+      const varType = target.substring(0, dotIndex);
+      const varName = target.substring(dotIndex + 1);
+
+      // Skip GraphQL mocks (handled above)
+      if (varType === 'query' || varType === 'mutation') {
+        return;
+      }
+
+      const declared = variablesByType.get(varType);
+      if (!declared || !declared.has(varName)) {
+        push(DiagnosticSeverity.Error, mock.targetStart + dotIndex + 1, mock.targetStart + target.length, `Unknown ${varType} variable in mock: ${varName}`);
       }
     }
   }
@@ -435,43 +493,6 @@ export class DocumentValidator {
       const head = m[2].trim();
       if (!mockHeadValid.test(head)) {
         push(DiagnosticSeverity.Error, lineStart, lineStart + head.length, 'Malformed mock syntax. Expected: with|and mock <middleware>[.<name>] returning `...`, with|and mock pipeline <name> returning `...`, or with|and mock query|mutation <name> returning `...`');
-      }
-    }
-  }
-
-  private validateAuthFlows(text: string, push: DiagnosticPush): void {
-    const authFlowRe = /(^|\n)\s*\|>\s*auth:\s*"([^"]*)"/g;
-    for (let m; (m = authFlowRe.exec(text)); ) {
-      const flow = m[2];
-      const ok = flow === 'optional' || flow === 'required' || flow === 'login' || flow === 'register' || flow === 'logout' || flow.startsWith('type:');
-      if (!ok) {
-        const flowStart = m.index + m[0].lastIndexOf(flow);
-        push(DiagnosticSeverity.Warning, flowStart, flowStart + flow.length, `Unknown auth flow: ${flow}`);
-      }
-    }
-  }
-
-  private validateResultBlocks(text: string, push: DiagnosticPush): void {
-    const resultBlockRe = /(^|\n)\s*\|>\s*result([\s\S]*?)(?=(\n\s*\|>|\n\s*(GET|POST|PUT|DELETE)|$))/g;
-    for (let m; (m = resultBlockRe.exec(text)); ) {
-      const block = m[2] || '';
-      const seenTypes = new Set<string>();
-      const branchRe = /\n\s*([A-Za-z_][\w-]*)\((\d{3})\):/g;
-      let bm: RegExpExecArray | null;
-      
-      while ((bm = branchRe.exec(block))) {
-        const type = bm[1];
-        const status = parseInt(bm[2], 10);
-        const typeAbsStart = m.index + bm.index + bm[0].indexOf(type);
-        const statusAbsStart = m.index + bm.index + bm[0].indexOf(bm[2]);
-        
-        if (status < 100 || status > 599) {
-          push(DiagnosticSeverity.Error, statusAbsStart, statusAbsStart + bm[2].length, `Invalid HTTP status code: ${status}`);
-        }
-        if (seenTypes.has(type)) {
-          push(DiagnosticSeverity.Warning, typeAbsStart, typeAbsStart + type.length, `Duplicate result branch type: ${type}`);
-        }
-        seenTypes.add(type);
       }
     }
   }
@@ -566,25 +587,6 @@ export class DocumentValidator {
     }
   }
 
-  private validateUnknownSteps(text: string, push: DiagnosticPush): void {
-    const stepNameRe = /(^|\n)\s*\|>\s*([A-Za-z_][\w-]*)\s*:/g;
-    for (let m; (m = stepNameRe.exec(text)); ) {
-      const step = m[2];
-      if (!KNOWN_STEPS.has(step)) {
-        const stepStart = m.index + m[0].indexOf(step);
-        push(DiagnosticSeverity.Warning, stepStart, stepStart + step.length, `Unknown step '${step}'. If this is custom middleware, ignore.`);
-      }
-    }
-  }
-
-  private validateUnclosedBackticks(text: string, push: DiagnosticPush): void {
-    const backtickCount = (text.match(/`/g) || []).length;
-    if (backtickCount % 2 === 1) {
-      const idx = text.lastIndexOf('`');
-      push(DiagnosticSeverity.Warning, Math.max(0, idx), Math.max(0, idx + 1), 'Unclosed backtick-delimited string');
-    }
-  }
-
   private validateHandlebarsPartialReferences(text: string, push: DiagnosticPush, program?: any): void {
     if (!program) return;
     const hb = collectHandlebarsSymbols(text, program);
@@ -617,91 +619,95 @@ export class DocumentValidator {
 
   /**
    * Validates that names referenced in join middleware exist as @async(name) tags
-   * in the same pipeline context.
+   * in the same pipeline context using AST.
    */
-  private validateJoinAsyncReferences(text: string, push: DiagnosticPush): void {
-    // Find pipeline context boundaries (routes, named pipelines, query/mutation resolvers)
-    // Each context can have its own @async tags and join steps
-    const boundaryRe = /(^|\n)\s*(GET|POST|PUT|DELETE|pipeline\s+[A-Za-z_][\w-]*\s*=|query\s+[A-Za-z_][\w-]*\s*=|mutation\s+[A-Za-z_][\w-]*\s*=|describe\s+|config\s+)/gm;
+  private validateJoinAsyncReferences(program: Program, text: string, push: DiagnosticPush): void {
+    if (!program) return;
 
-    const contexts: Array<{ start: number; end: number; type: string }> = [];
-    let match;
-
-    while ((match = boundaryRe.exec(text)) !== null) {
-      const type = match[2].split(/\s/)[0];
-      const start = match.index + (match[1] === '\n' ? 1 : 0);
-
-      // Close previous context
-      if (contexts.length > 0) {
-        contexts[contexts.length - 1].end = start;
-      }
-
-      contexts.push({ start, end: text.length, type });
-    }
-
-    // Process each pipeline context
-    for (const ctx of contexts) {
-      // Skip non-pipeline contexts (describe blocks for tests, config blocks)
-      if (ctx.type === 'describe' || ctx.type === 'config') continue;
-
-      const slice = text.slice(ctx.start, ctx.end);
-
-      // Collect @async(name) tag names from this context
+    // Helper to validate a single pipeline
+    const validatePipeline = (pipeline: { steps: PipelineStep[]; start: number; end: number }) => {
+      // Collect @async(name) tags from this pipeline (using regex on the pipeline slice for now)
+      const pipelineText = text.slice(pipeline.start, pipeline.end);
       const asyncNames = new Set<string>();
       const asyncTagRe = /@async\(\s*([A-Za-z_][\w-]*)\s*\)/g;
-      while ((match = asyncTagRe.exec(slice)) !== null) {
+      let match;
+      while ((match = asyncTagRe.exec(pipelineText)) !== null) {
         asyncNames.add(match[1]);
       }
 
       // Find join steps and validate their references
-      // Match: |> join: `config` or |> join: "config"
-      const joinStepRe = /\|>\s*join\s*:\s*(?:`([^`]*)`|"([^"]*)")/g;
-      while ((match = joinStepRe.exec(slice)) !== null) {
-        const joinConfig = match[1] ?? match[2];
-        if (!joinConfig) continue;
+      const findJoinSteps = (steps: PipelineStep[]): void => {
+        for (const step of steps) {
+          // Check for join steps using AST-provided parsedJoinTargets
+          if (step.kind === 'Regular' && step.name === 'join' && step.parsedJoinTargets) {
+            for (const taskName of step.parsedJoinTargets) {
+              if (!asyncNames.has(taskName)) {
+                // Use config position for error reporting
+                const configStart = step.configStart ?? step.start;
+                push(
+                  DiagnosticSeverity.Error,
+                  configStart,
+                  step.configEnd ?? (configStart + step.config.length),
+                  `Unknown async task '${taskName}'. No @async(${taskName}) tag found in this pipeline.`
+                );
+              }
+            }
+          }
 
-        // Find where the config content starts in the match
-        const configStart = match[0].indexOf(joinConfig);
-        const joinNames = this.parseJoinConfigNames(joinConfig);
-
-        for (const { name, offset } of joinNames) {
-          if (!asyncNames.has(name)) {
-            const absStart = ctx.start + match.index + configStart + offset;
-            push(
-              DiagnosticSeverity.Error,
-              absStart,
-              absStart + name.length,
-              `Unknown async task '${name}'. No @async(${name}) tag found in this pipeline.`
-            );
+          // Recursively check nested pipelines
+          if (step.kind === 'If') {
+            findJoinSteps(step.condition.steps);
+            findJoinSteps(step.thenBranch.steps);
+            if (step.elseBranch) findJoinSteps(step.elseBranch.steps);
+          } else if (step.kind === 'Dispatch') {
+            for (const branch of step.branches) {
+              findJoinSteps(branch.pipeline.steps);
+            }
+            if (step.default) findJoinSteps(step.default.steps);
+          } else if (step.kind === 'Foreach') {
+            findJoinSteps(step.pipeline.steps);
+          } else if (step.kind === 'Result') {
+            for (const branch of step.branches) {
+              findJoinSteps(branch.pipeline.steps);
+            }
           }
         }
+      };
+
+      findJoinSteps(pipeline.steps);
+    };
+
+    // Validate all route pipelines
+    for (const route of program.routes) {
+      if (route.pipeline.kind === 'Inline') {
+        validatePipeline(route.pipeline.pipeline);
       }
     }
-  }
 
-  /**
-   * Parses a join config string and extracts the task names with their positions.
-   * Handles: comma-separated names, JSON arrays, quoted and unquoted names.
-   * Examples: "user,posts,todos", '["github","bitcoin"]', "req1, req2, req3"
-   */
-  private parseJoinConfigNames(config: string): Array<{ name: string; offset: number }> {
-    const results: Array<{ name: string; offset: number }> = [];
-
-    // Match: "name", 'name', or bare identifier
-    // This handles all formats: plain comma-separated, JSON arrays, quoted strings
-    const nameRe = /"([A-Za-z_][\w-]*)"|'([A-Za-z_][\w-]*)'|\b([A-Za-z_][\w-]*)\b/g;
-
-    let match;
-    while ((match = nameRe.exec(config)) !== null) {
-      const name = match[1] ?? match[2] ?? match[3];
-      if (!name) continue;
-
-      // Calculate offset: +1 if quoted to skip the opening quote
-      const offset = match.index + (match[1] !== undefined || match[2] !== undefined ? 1 : 0);
-      results.push({ name, offset });
+    // Validate all named pipelines
+    for (const namedPipeline of program.pipelines) {
+      validatePipeline(namedPipeline.pipeline);
     }
 
-    return results;
+    // Validate GraphQL query resolvers
+    for (const query of program.queries) {
+      validatePipeline(query.pipeline);
+    }
+
+    // Validate GraphQL mutation resolvers
+    for (const mutation of program.mutations) {
+      validatePipeline(mutation.pipeline);
+    }
+
+    // Validate GraphQL field resolvers
+    for (const resolver of program.resolvers) {
+      validatePipeline(resolver.pipeline);
+    }
+
+    // Validate feature flags pipeline
+    if (program.featureFlags) {
+      validatePipeline(program.featureFlags);
+    }
   }
 
   /**
