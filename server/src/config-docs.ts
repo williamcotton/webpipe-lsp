@@ -219,6 +219,24 @@ export const configDocs: Record<string, ConfigDoc> = {
     examples: [
       'config log {\n  enabled: true\n  format: "json"\n  level: "debug"\n  includeBody: true\n  includeHeaders: false\n  maxBodySize: 2048\n  timestamp: true\n}'
     ]
+  },
+
+  graphql: {
+    name: 'graphql',
+    description: 'GraphQL configuration for automatic endpoint generation.',
+    options: [
+      {
+        name: 'endpoint',
+        type: 'string',
+        description: 'Automatic GraphQL endpoint path for query and mutation execution',
+        default: '/graphql',
+        required: false
+      }
+    ],
+    examples: [
+      'config graphql {\n  endpoint: "/graphql"\n}',
+      'config graphql {\n  endpoint: "/api/graphql"\n}'
+    ]
   }
 };
 
