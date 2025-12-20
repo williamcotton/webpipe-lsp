@@ -1,9 +1,9 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import {
-  Location, Position, Hover, MarkupKind, ReferenceParams,
+  Location, LocationLink, Position, Hover, MarkupKind, ReferenceParams,
   HoverParams, DefinitionParams, RenameParams, WorkspaceEdit, TextEdit, Connection
 } from 'vscode-languageserver/node';
-import { Describe, PipelineStep } from 'webpipe-js';
+import { Describe, PipelineStep, Route } from 'webpipe-js';
 import { getWordAt, createMarkdownCodeBlock } from './utils';
 import { RangeAbs, SymbolTable, HandlebarsSymbols } from './types';
 import { getMiddlewareDoc, formatMiddlewareHover } from './middleware-docs';
@@ -103,6 +103,16 @@ export class LanguageProviders {
         // Check if we're hovering over the variable name
         if (offset >= whenNode.nameStart && offset < whenNode.nameStart + whenNode.name.length) {
           return { node, kind: 'variable', varType: whenNode.varType };
+        }
+      }
+      if (whenNode.kind === 'CallingRoute') {
+        // Check if hovering over HTTP method
+        if (offset >= whenNode.methodStart && offset < whenNode.methodStart + whenNode.method.length) {
+          return { node, kind: 'route' };
+        }
+        // Check if hovering over route path
+        if (offset >= whenNode.pathStart && offset < whenNode.pathStart + whenNode.path.length) {
+          return { node, kind: 'route' };
         }
       }
     }
@@ -260,6 +270,22 @@ export class LanguageProviders {
     const graphqlHover = this.getGraphQLHoverAST(context, text, word, offset, doc);
     if (graphqlHover) return graphqlHover;
 
+    // Route calling hover (when calling METHOD /path)
+    if (context.kind === 'route' && context.node) {
+      const whenNode = context.node as any;
+      if (whenNode.kind === 'CallingRoute') {
+        const hoverText = this.formatRouteHover(
+          text,
+          whenNode.method,
+          whenNode.path,
+          doc
+        );
+        if (hoverText) {
+          return { contents: { kind: MarkupKind.Markdown, value: hoverText } };
+        }
+      }
+    }
+
     // Handlebars partial hover
     const handlebarsHover = this.getHandlebarsHover(text, offset, word, doc, symbols);
     if (handlebarsHover) return handlebarsHover;
@@ -267,7 +293,7 @@ export class LanguageProviders {
     return null;
   }
 
-  onDefinition(params: DefinitionParams, doc: TextDocument): Location | null {
+  onDefinition(params: DefinitionParams, doc: TextDocument): Location | LocationLink[] | null {
     const text = this.cache.getText(doc);
     const symbols = this.cache.getSymbols(doc);
     const pos = params.position as Position;
@@ -329,6 +355,41 @@ export class LanguageProviders {
     // Handlebars definition
     const handlebarsDefinition = this.getHandlebarsDefinition(symbols.handlebars, offset, doc);
     if (handlebarsDefinition) return handlebarsDefinition;
+
+    // Route calling definition (when calling METHOD /path)
+    if (context.kind === 'route' && context.node) {
+      const whenNode = context.node as any;
+      if (whenNode.kind === 'CallingRoute') {
+        const program = this.cache.getProgram(doc);
+        const matchingRoute = this.findMatchingRoute(
+          whenNode.method,
+          whenNode.path,
+          program.routes
+        );
+
+        if (matchingRoute) {
+          // Navigate to route definition, position cursor at method
+          const targetRange = {
+            start: doc.positionAt(matchingRoute.start),
+            end: doc.positionAt(matchingRoute.start + matchingRoute.method.length)
+          };
+
+          // Highlight the entire "METHOD /path" in the source (when calling line)
+          const originRange = {
+            start: doc.positionAt(whenNode.methodStart),
+            end: doc.positionAt(whenNode.pathStart + whenNode.path.length)
+          };
+
+          // Return DefinitionLink with origin range to control the blue underline
+          return [{
+            targetUri: doc.uri,
+            targetRange: targetRange,
+            targetSelectionRange: targetRange,
+            originSelectionRange: originRange
+          }];
+        }
+      }
+    }
 
     return null;
   }
@@ -1190,5 +1251,97 @@ export class LanguageProviders {
     }
 
     return null;
+  }
+
+  /**
+   * Parse a route path into segments for AST-based comparison.
+   * Example: "/users/:id/posts" → ["users", ":id", "posts"]
+   */
+  private parsePathSegments(path: string): string[] {
+    return path.split('/').filter(s => s.length > 0);
+  }
+
+  /**
+   * Match two paths using segment-by-segment AST comparison (no regex).
+   * Template path can have parameters like ":id", incoming path has actual values.
+   *
+   * Example:
+   *   matchPathSegments("/users/:id", "/users/123") → true
+   *   matchPathSegments("/users/:id/posts", "/users/123/comments") → false
+   */
+  private matchPathSegments(templatePath: string, incomingPath: string): boolean {
+    const templateSegments = this.parsePathSegments(templatePath);
+    const incomingSegments = this.parsePathSegments(incomingPath);
+
+    // Must have same number of segments
+    if (templateSegments.length !== incomingSegments.length) {
+      return false;
+    }
+
+    // Compare segment by segment
+    for (let i = 0; i < templateSegments.length; i++) {
+      const templateSeg = templateSegments[i];
+      const incomingSeg = incomingSegments[i];
+
+      // Parameter segment (starts with ':') matches anything
+      if (templateSeg.startsWith(':')) {
+        continue;
+      }
+
+      // Static segment must match exactly
+      if (templateSeg !== incomingSeg) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Find route definition matching the given method and path using AST-based comparison
+   */
+  private findMatchingRoute(method: string, path: string, routes: Route[]): Route | null {
+    // Strip query string if present
+    const cleanPath = path.split('?')[0];
+
+    // Find routes matching the HTTP method and path pattern
+    for (const route of routes) {
+      // Method must match (case-insensitive)
+      if (route.method.toUpperCase() !== method.toUpperCase()) {
+        continue;
+      }
+
+      // Use AST-based path segment comparison instead of regex
+      if (this.matchPathSegments(route.path, cleanPath)) {
+        return route;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Format hover text for route definition
+   */
+  private formatRouteHover(
+    text: string,
+    method: string,
+    path: string,
+    doc: TextDocument
+  ): string | null {
+    const program = this.cache.getProgram(doc);
+    const matchingRoute = this.findMatchingRoute(method, path, program.routes);
+
+    if (!matchingRoute) return null;
+
+    // Extract route definition text from source
+    let snippet = text.slice(matchingRoute.start, matchingRoute.end).trimEnd();
+
+    // Truncate if too long (same as pipeline hover)
+    if (snippet.length > 2400) {
+      snippet = snippet.slice(0, 2400) + '\n…';
+    }
+
+    return createMarkdownCodeBlock('webpipe', snippet);
   }
 }
