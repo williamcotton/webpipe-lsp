@@ -155,6 +155,56 @@ export default function(hljs) {
         ]
       },
 
+      // when calling HTTP method and route
+      {
+        match: '\\b(when|and)\\s+(calling)\\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\\s+([^\\s]+)',
+        captures: {
+          1: { scope: 'keyword' },
+          2: { scope: 'keyword' },
+          3: { scope: 'keyword' },
+          4: { scope: 'string' }
+        }
+      },
+
+      // with/and with input/body/cookies/headers
+      {
+        begin: '\\b(with|and)(?:\\s+(with))?\\s+(body|input|cookies|headers)\\s*`',
+        beginScope: {
+          1: 'keyword',
+          2: 'keyword',
+          3: 'keyword'
+        },
+        end: '`',
+        contains: [
+          { scope: 'string', begin: '"', end: '"' },
+          { scope: 'variable', match: '\\.[a-zA-Z_][a-zA-Z0-9_]*|\\.[0-9]+' },
+          { scope: 'variable', match: '\\$[a-zA-Z_][a-zA-Z0-9_]*' },
+          { scope: 'number', match: '\\b[0-9]+(?:\\.[0-9]+)?\\b' },
+          { scope: 'literal', match: '\\b(null|true|false)\\b' },
+          { scope: 'keyword', match: '\\b(map|select|keys|values|length|tostring|tonumber|type)\\b' }
+        ]
+      },
+
+      // with/and with mock returning
+      {
+        begin: '\\b(with|and)(?:\\s+(with))?\\s+(mock)\\s+([a-zA-Z_][a-zA-Z0-9_.-]*)\\s+(returning)\\s*`',
+        beginScope: {
+          1: 'keyword',
+          2: 'keyword',
+          3: 'keyword',
+          4: 'variable',
+          5: 'keyword'
+        },
+        end: '`',
+        contains: [
+          { scope: 'string', begin: '"', end: '"' },
+          { scope: 'variable', match: '\\.[a-zA-Z_][a-zA-Z0-9_]*|\\.[0-9]+' },
+          { scope: 'variable', match: '\\$[a-zA-Z_][a-zA-Z0-9_]*' },
+          { scope: 'number', match: '\\b[0-9]+(?:\\.[0-9]+)?\\b' },
+          { scope: 'literal', match: '\\b(null|true|false)\\b' }
+        ]
+      },
+
       // SQL embedded content
       {
         begin: '\\bpg:\\s*`',
