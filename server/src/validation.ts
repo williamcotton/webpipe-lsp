@@ -216,6 +216,33 @@ export class DocumentValidator {
       }
     }
 
+    // Add automatic GraphQL endpoint if configured
+    // This mirrors the server behavior in server.rs lines 335-369
+    const graphqlConfig = program.configs.find(c => c.name === 'graphql');
+    if (graphqlConfig && program.graphqlSchema) {
+      const endpointProp = graphqlConfig.properties.find(p => p.key === 'endpoint');
+      if (endpointProp && endpointProp.value.kind === 'String') {
+        const endpoint = endpointProp.value.value;
+        const routeKey = `POST ${endpoint}`;
+
+        // Only add if user hasn't defined this route explicitly (same logic as server.rs)
+        if (!routes.has(routeKey)) {
+          routes.add(routeKey);
+
+          // Build matching regex for calls
+          const pattern = '^' + endpoint
+            .replace(/[.*+?^${}()|[\]\\]/g, (ch) => `\\${ch}`)
+            .replace(/:(?:[A-Za-z_][\w-]*)/g, '[^/]+') + '$';
+
+          try {
+            routePatterns.push({ method: 'POST', path: endpoint, regex: new RegExp(pattern) });
+          } catch (_e) {
+            // Ignore bad pattern
+          }
+        }
+      }
+    }
+
     return routePatterns;
   }
 
