@@ -17,11 +17,12 @@
     "vscode": "^1.89.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Debuggers"
   ],
   "main": "./client/out/extension.js",
   "activationEvents": [
-    "onLanguage:webpipe"
+    "onDebug"
   ],
   "scripts": {
     "compile": "npm run compile:client && npm run compile:server",
@@ -58,6 +59,71 @@
           "meta.embedded.block.lua": "lua",
           "meta.embedded.block.mustache": "mustache"
         }
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "webpipe"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "webpipe",
+        "label": "Web Pipe Debug",
+        "languages": ["webpipe"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to .wp file to debug",
+                "default": "${file}"
+              },
+              "port": {
+                "type": "number",
+                "description": "HTTP server port",
+                "default": 7770
+              },
+              "debugPort": {
+                "type": "number",
+                "description": "DAP debug port",
+                "default": 5858
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Automatically stop after launch",
+                "default": false
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "webpipe",
+            "request": "launch",
+            "name": "Debug Web Pipe",
+            "program": "${file}",
+            "port": 7770,
+            "debugPort": 5858,
+            "stopOnEntry": false
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Web Pipe: Debug",
+            "description": "Debug a Web Pipe .wp file",
+            "body": {
+              "type": "webpipe",
+              "request": "launch",
+              "name": "Debug Web Pipe",
+              "program": "^\"\\${file}\"",
+              "port": 7770,
+              "debugPort": 5858,
+              "stopOnEntry": false
+            }
+          }
+        ]
       }
     ]
   },
