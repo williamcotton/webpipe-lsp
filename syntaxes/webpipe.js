@@ -125,6 +125,19 @@ export default function(hljs) {
         ]
       },
 
+      // JS embedded content
+      {
+        begin: '\\bjs:\\s*`',
+        end: '`',
+        subLanguage: 'javascript',
+        contains: [
+          {
+            scope: 'variable',
+            match: 'request\\.[a-zA-Z_][a-zA-Z0-9_]*'
+          }
+        ]
+      },
+
       // JQ embedded content
       {
         begin: '\\bjq:\\s*`',

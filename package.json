@@ -57,6 +57,8 @@
           "meta.embedded.block.sql": "sql",
           "meta.embedded.block.jq": "jq",
           "meta.embedded.block.lua": "lua",
+          "meta.embedded.block.js": "javascript",
+          "meta.embedded.js.webpipe": "javascript",
           "meta.embedded.block.mustache": "mustache"
         }
       }

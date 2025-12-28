@@ -165,6 +165,17 @@ export const middlewareDocs: Record<string, MiddlewareDoc> = {
     ]
   },
 
+  js: {
+    name: 'js',
+    description: 'Run JavaScript (Node.js) scripts with access to `request` JSON.',
+    inputs: [
+      'Globals: `request` (current JSON)',
+    ],
+    examples: [
+      'GET /hello\n  |> js: `\n    const name = request.query.name || "World";\n    return { message: `Hello ${name}` };\n  `'
+    ]
+  },
+
   debug: {
     name: 'debug',
     description: 'Prints a label and the current pipeline value to stdout. No changes to the value.',

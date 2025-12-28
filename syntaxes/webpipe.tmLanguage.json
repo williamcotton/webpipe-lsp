@@ -268,6 +268,25 @@
           ]
         },
         {
+          "begin": "^\\s*(js)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s*=\\s*`",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.middleware.webpipe"
+            },
+            "2": {
+              "name": "variable.other.assignment.webpipe"
+            }
+          },
+          "end": "`",
+          "name": "meta.variable-assignment.js.webpipe",
+          "contentName": "source.js",
+          "patterns": [
+            {
+              "include": "source.js"
+            }
+          ]
+        },
+        {
           "begin": "^\\s*(pg)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s*=\\s*`",
           "beginCaptures": {
             "1": {
@@ -457,6 +476,24 @@
             { "begin": "\\[", "end": "\\]", "patterns": [ { "include": "#jq-embedded" } ] },
             { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
             { "begin": "`", "end": "`", "name": "meta.embedded.lua.webpipe", "contentName": "source.lua", "patterns": [ { "include": "source.lua" } ] },
+            { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
+            { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
+            { "include": "#tags" },
+            { "include": "#comments" }
+          ]
+        },
+        {
+          "begin": "\\s*(\\|>)\\s*(js)",
+          "beginCaptures": {
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.js.webpipe" }
+          },
+          "end": "(?=$|\\s*\\|>|\\s*@)",
+          "patterns": [
+            { "begin": "\\(", "end": "\\)", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\\[", "end": "\\]", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
+            { "begin": "`", "end": "`", "name": "meta.embedded.js.webpipe", "contentName": "source.js", "patterns": [ { "include": "source.js" } ] },
             { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
             { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
             { "include": "#tags" },
