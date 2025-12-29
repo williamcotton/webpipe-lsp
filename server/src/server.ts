@@ -12,6 +12,7 @@ import { CompletionProvider } from './completion-provider';
 import { LanguageProviders } from './language-providers';
 import { UIProviders } from './ui-providers';
 import { DocumentCache } from './document-cache';
+import { FormattingProvider } from './formatting-provider';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
@@ -24,6 +25,7 @@ const documentValidator = new DocumentValidator(connection, documentCache);
 const completionProvider = new CompletionProvider(documentCache);
 const languageProviders = new LanguageProviders(documentCache, connection);
 const uiProviders = new UIProviders(documentCache);
+const formattingProvider = new FormattingProvider(documentCache);
 
 connection.onInitialize((_params: InitializeParams): InitializeResult => {
   return {
@@ -37,6 +39,7 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
       definitionProvider: true,
       renameProvider: true,
       codeActionProvider: true,
+      documentFormattingProvider: true,
     }
   };
 });
@@ -96,6 +99,11 @@ connection.onRenameRequest((params) => {
 connection.onCodeAction((params) => {
   const doc = documents.get(params.textDocument.uri);
   return doc ? uiProviders.onCodeAction(params, doc) : [];
+});
+
+connection.onDocumentFormatting((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? formattingProvider.onFormatting(params, doc) : [];
 });
 
 connection.onRequest('webpipe/extractPipeline', (params: { uri: string; range: any; pipelineName: string }) => {
