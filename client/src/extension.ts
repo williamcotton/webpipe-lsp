@@ -184,22 +184,23 @@ class WebPipeDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescrip
     const port = config.port || 7770;
     const debugPort = config.debugPort || 5858;
 
-    // Find webpipe-dap binary
-    const webpipeDapPath = this.findWebpipeDap();
-    if (!webpipeDapPath) {
-      vscode.window.showErrorMessage('Cannot find webpipe-dap binary. Please ensure webpipe is installed with debugger feature enabled.');
+    // Find webpipe binary
+    const webpipePath = this.findWebpipe();
+    if (!webpipePath) {
+      vscode.window.showErrorMessage('Cannot find webpipe binary. Please ensure webpipe is installed with the debugger feature enabled (cargo build --features debugger).');
       return undefined;
     }
 
     // Kill any existing process before spawning a new one
     this.dispose();
 
-    // Launch webpipe-dap process
+    // Launch webpipe process in inspect mode
     const spawn = require('child_process').spawn;
-    this.debugProcess = spawn(webpipeDapPath, [
+    this.debugProcess = spawn(webpipePath, [
       program,
+      '--inspect',
       '--port', port.toString(),
-      '--debug-port', debugPort.toString()
+      '--inspect-port', debugPort.toString()
     ], {
       cwd: path.dirname(program),
       env: { ...process.env }
@@ -207,15 +208,15 @@ class WebPipeDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescrip
 
     // Log output for debugging
     this.debugProcess.stdout?.on('data', (data: Buffer) => {
-      console.log(`[webpipe-dap] ${data.toString()}`);
+      console.log(`[webpipe] ${data.toString()}`);
     });
 
     this.debugProcess.stderr?.on('data', (data: Buffer) => {
-      console.error(`[webpipe-dap] ${data.toString()}`);
+      console.error(`[webpipe] ${data.toString()}`);
     });
 
     this.debugProcess.on('exit', (code: number) => {
-      console.log(`[webpipe-dap] Process exited with code ${code}`);
+      console.log(`[webpipe] Process exited with code ${code}`);
     });
 
     // Wait a moment for the DAP server to start, then connect
@@ -252,15 +253,15 @@ class WebPipeDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescrip
   }
 
   /**
-   * Find webpipe-dap binary in common locations
+   * Find webpipe binary in common locations
    */
-  private findWebpipeDap(): string | null {
+  private findWebpipe(): string | null {
     const { execSync } = require('child_process');
 
     try {
       // Try to find in PATH using 'which' (Unix) or 'where' (Windows)
       const command = process.platform === 'win32' ? 'where' : 'which';
-      const result = execSync(`${command} webpipe-dap`, { encoding: 'utf8' }).trim();
+      const result = execSync(`${command} webpipe`, { encoding: 'utf8' }).trim();
       if (result) {
         return result.split('\n')[0]; // First result if multiple
       }
@@ -272,10 +273,10 @@ class WebPipeDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescrip
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (workspaceFolder) {
       const candidates = [
-        path.join(workspaceFolder.uri.fsPath, 'webpipe', 'target', 'debug', 'webpipe-dap'),
-        path.join(workspaceFolder.uri.fsPath, 'webpipe', 'target', 'release', 'webpipe-dap'),
-        path.join(workspaceFolder.uri.fsPath, 'target', 'debug', 'webpipe-dap'),
-        path.join(workspaceFolder.uri.fsPath, 'target', 'release', 'webpipe-dap'),
+        path.join(workspaceFolder.uri.fsPath, 'webpipe', 'target', 'debug', 'webpipe'),
+        path.join(workspaceFolder.uri.fsPath, 'webpipe', 'target', 'release', 'webpipe'),
+        path.join(workspaceFolder.uri.fsPath, 'target', 'debug', 'webpipe'),
+        path.join(workspaceFolder.uri.fsPath, 'target', 'release', 'webpipe'),
       ];
 
       for (const candidate of candidates) {
