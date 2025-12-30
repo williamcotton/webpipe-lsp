@@ -5,12 +5,12 @@ import {
   CodeActionKind, TextEdit
 } from 'vscode-languageserver/node';
 import { getWordAt } from './utils';
-import { DocumentCache } from './document-cache';
+import { WorkspaceManager } from './workspace-manager';
 import { filterReferencesInScope } from './symbol-collector';
 import { findNodeAtOffset } from './ast-utils';
 
 export class UIProviders {
-  constructor(private cache: DocumentCache) {}
+  constructor(private cache: WorkspaceManager) {}
 
   onCodeLens(_params: CodeLensParams, doc: TextDocument): CodeLens[] {
     const program = this.cache.getProgram(doc);

@@ -11,23 +11,34 @@ import { DocumentValidator } from './validation';
 import { CompletionProvider } from './completion-provider';
 import { LanguageProviders } from './language-providers';
 import { UIProviders } from './ui-providers';
-import { DocumentCache } from './document-cache';
+import { WorkspaceManager } from './workspace-manager';
 import { FormattingProvider } from './formatting-provider';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 
-// Initialize document cache
-const documentCache = new DocumentCache();
+// WorkspaceManager will be initialized in onInitialize
+let workspaceManager: WorkspaceManager;
+let documentValidator: DocumentValidator;
+let completionProvider: CompletionProvider;
+let languageProviders: LanguageProviders;
+let uiProviders: UIProviders;
+let formattingProvider: FormattingProvider;
 
-// Initialize providers with cache
-const documentValidator = new DocumentValidator(connection, documentCache);
-const completionProvider = new CompletionProvider(documentCache);
-const languageProviders = new LanguageProviders(documentCache, connection);
-const uiProviders = new UIProviders(documentCache);
-const formattingProvider = new FormattingProvider(documentCache);
+connection.onInitialize((params: InitializeParams): InitializeResult => {
+  // Extract workspace root from initialization params
+  const workspaceRoot = params.workspaceFolders?.[0]?.uri || '';
 
-connection.onInitialize((_params: InitializeParams): InitializeResult => {
+  // Initialize workspace manager with multi-file support
+  workspaceManager = new WorkspaceManager(connection, documents, workspaceRoot);
+
+  // Initialize providers with workspace manager
+  documentValidator = new DocumentValidator(connection, workspaceManager);
+  completionProvider = new CompletionProvider(workspaceManager);
+  languageProviders = new LanguageProviders(workspaceManager, connection);
+  uiProviders = new UIProviders(workspaceManager);
+  formattingProvider = new FormattingProvider(workspaceManager);
+
   return {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
@@ -53,7 +64,10 @@ documents.onDidOpen(async open => {
   await documentValidator.validateDocument(open.document);
 });
 
-connection.onInitialized(() => {
+connection.onInitialized(async () => {
+  // Initialize file system watching
+  await workspaceManager.initialize();
+
   // Validate all open documents once the server is ready
   for (const doc of documents.all()) {
     documentValidator.validateDocument(doc);
@@ -118,7 +132,7 @@ connection.onRequest('webpipe/extractPipeline', (params: { uri: string; range: a
 
 // Clean up cache when document is closed
 documents.onDidClose((event) => {
-  documentCache.invalidate(event.document.uri);
+  workspaceManager.invalidate(event.document.uri);
 });
 
 // Start the server

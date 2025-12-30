@@ -5,14 +5,14 @@ import {
   Range,
 } from 'vscode-languageserver/node';
 import { prettyPrint } from 'webpipe-js';
-import { DocumentCache } from './document-cache';
+import { WorkspaceManager } from './workspace-manager';
 
 /**
  * Formatting provider for .wp documents.
  * Uses prettyPrint from webpipe-js to format entire documents.
  */
 export class FormattingProvider {
-  constructor(private cache: DocumentCache) {}
+  constructor(private cache: WorkspaceManager) {}
 
   /**
    * Format an entire document

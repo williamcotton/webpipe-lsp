@@ -1,23 +1,28 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import {
   Location, LocationLink, Position, Hover, MarkupKind, ReferenceParams,
-  HoverParams, DefinitionParams, RenameParams, WorkspaceEdit, TextEdit, Connection
+  HoverParams, DefinitionParams, RenameParams, WorkspaceEdit, TextEdit, Connection, Range
 } from 'vscode-languageserver/node';
 import { Describe, PipelineStep, Route } from 'webpipe-js';
 import { getWordAt, createMarkdownCodeBlock } from './utils';
 import { RangeAbs, SymbolTable, HandlebarsSymbols } from './types';
 import { getMiddlewareDoc, formatMiddlewareHover } from './middleware-docs';
 import { getConfigDoc, formatConfigHover } from './config-docs';
-import { DocumentCache } from './document-cache';
+import { WorkspaceManager } from './workspace-manager';
+import { SymbolResolver } from './symbol-resolver';
 import { findTestContextAtOffset, findDescribeBlockRange, getLetVariableValue } from './test-variable-utils';
 import { findNodeAtOffset, ASTNode } from './ast-utils';
 
 /**
  * Language providers for hover, definition, and references.
- * Uses centralized symbol table from DocumentCache to avoid repeated parsing.
+ * Uses centralized symbol table from WorkspaceManager with multi-file support.
  */
 export class LanguageProviders {
-  constructor(private cache: DocumentCache, private connection?: Connection) {}
+  private symbolResolver: SymbolResolver;
+
+  constructor(private workspace: WorkspaceManager, private connection?: Connection) {
+    this.symbolResolver = new SymbolResolver();
+  }
 
   /**
    * Get AST-based context information at a given offset
@@ -30,7 +35,7 @@ export class LanguageProviders {
     graphqlType?: 'query' | 'mutation';
     graphqlName?: string;
   } {
-    const program = this.cache.getProgram(doc);
+    const program = this.workspace.getProgram(doc);
     const node = findNodeAtOffset(program, offset);
 
     if (!node) {
@@ -60,7 +65,7 @@ export class LanguageProviders {
         // Find where the config string actually starts in the document
         // The step.start is the start of the entire step (including |>)
         // We need to find the opening backtick
-        const text = this.cache.getText(doc);
+        const text = this.workspace.getText(doc);
         const configStart = text.indexOf(step.config, step.start);
 
         if (configStart !== -1) {
@@ -140,8 +145,8 @@ export class LanguageProviders {
   }
 
   onReferences(params: ReferenceParams, doc: TextDocument): Location[] | null {
-    const text = this.cache.getText(doc);
-    const symbols = this.cache.getSymbols(doc);
+    const text = this.workspace.getText(doc);
+    const symbols = this.workspace.getSymbols(doc);
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);
     const wordInfo = getWordAt(text, offset);
@@ -197,8 +202,8 @@ export class LanguageProviders {
   }
 
   onHover(params: HoverParams, doc: TextDocument): Hover | null {
-    const text = this.cache.getText(doc);
-    const symbols = this.cache.getSymbols(doc);
+    const text = this.workspace.getText(doc);
+    const symbols = this.workspace.getSymbols(doc);
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);
     const wordInfo = getWordAt(text, offset);
@@ -206,6 +211,49 @@ export class LanguageProviders {
 
     const { word } = wordInfo;
     const context = this.getASTContext(offset, doc);
+
+    // Handle scoped references (cross-file hover)
+    if (this.symbolResolver.isScoped(word)) {
+      // Pipeline or query/mutation hover
+      if (context.kind === 'pipeline' || context.kind === 'graphql' || this.isPipelineContextAST(offset, doc)) {
+        const resolved = this.symbolResolver.resolveReference(
+          doc.uri,
+          word,
+          (uri) => this.workspace.getDocument(uri)
+        );
+
+        if (resolved) {
+          const targetMetadata = this.workspace.getDocument(resolved.uri);
+          if (targetMetadata) {
+            const filename = resolved.uri.split('/').pop() || resolved.uri;
+            const snippet = this.extractCodeSnippet(targetMetadata.text, resolved.symbol);
+            const md = `**${word}** (imported from \`${filename}\`)\n\n\`\`\`webpipe\n${snippet}\n\`\`\``;
+            return { contents: { kind: MarkupKind.Markdown, value: md } };
+          }
+        }
+      }
+
+      // Variable hover
+      const variableKey = this.getVariableKeyAST(context, word);
+      if (variableKey) {
+        const resolved = this.symbolResolver.resolveVariableReference(
+          doc.uri,
+          variableKey.varType,
+          word,
+          (uri) => this.workspace.getDocument(uri)
+        );
+
+        if (resolved) {
+          const targetMetadata = this.workspace.getDocument(resolved.uri);
+          if (targetMetadata) {
+            const filename = resolved.uri.split('/').pop() || resolved.uri;
+            const snippet = this.extractCodeSnippet(targetMetadata.text, resolved.symbol);
+            const md = `**${word}** (imported from \`${filename}\`)\n\n\`\`\`webpipe\n${snippet}\n\`\`\``;
+            return { contents: { kind: MarkupKind.Markdown, value: md } };
+          }
+        }
+      }
+    }
 
     // Config hover (check first)
     if (context.kind === 'config') {
@@ -294,8 +342,8 @@ export class LanguageProviders {
   }
 
   onDefinition(params: DefinitionParams, doc: TextDocument): Location | LocationLink[] | null {
-    const text = this.cache.getText(doc);
-    const symbols = this.cache.getSymbols(doc);
+    const text = this.workspace.getText(doc);
+    const symbols = this.workspace.getSymbols(doc);
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);
     const wordInfo = getWordAt(text, offset);
@@ -304,7 +352,114 @@ export class LanguageProviders {
     const { word } = wordInfo;
     const context = this.getASTContext(offset, doc);
 
-    // Pipeline definition
+    // Check for import statement navigation (click on file path in import line)
+    const program = this.workspace.getProgram(doc);
+    if (program.imports) {
+      for (const imp of program.imports) {
+        // Check if cursor is on the import path
+        if (offset >= imp.start && offset <= imp.end) {
+          const metadata = this.workspace.getDocument(doc.uri);
+          if (metadata) {
+            const resolved = metadata.imports.find(i => i.alias === imp.alias);
+            if (resolved && resolved.resolved && resolved.uri) {
+              return Location.create(resolved.uri, Range.create(0, 0, 0, 0));
+            }
+          }
+        }
+      }
+    }
+
+    // Handle scoped references (cross-file navigation)
+    if (this.symbolResolver.isScoped(word)) {
+      // Pipeline or query/mutation reference
+      if (context.kind === 'pipeline' || context.kind === 'graphql' || this.isPipelineContextAST(offset, doc)) {
+        const resolved = this.symbolResolver.resolveReference(
+          doc.uri,
+          word,
+          (uri) => this.workspace.getDocument(uri)
+        );
+
+        if (resolved) {
+          const range = {
+            start: Position.create(0, 0),  // Will be calculated from target metadata
+            end: Position.create(0, 0)
+          };
+
+          // Get the target document to calculate position
+          const targetMetadata = this.workspace.getDocument(resolved.uri);
+          if (targetMetadata) {
+            // Create a virtual TextDocument for position calculation
+            const targetDoc = {
+              uri: resolved.uri,
+              positionAt: (offset: number) => {
+                const text = targetMetadata.text;
+                let line = 0, col = 0;
+                for (let i = 0; i < offset && i < text.length; i++) {
+                  if (text[i] === '\n') {
+                    line++;
+                    col = 0;
+                  } else {
+                    col++;
+                  }
+                }
+                return Position.create(line, col);
+              }
+            } as any;
+
+            range.start = targetDoc.positionAt(resolved.symbol.start);
+            range.end = targetDoc.positionAt(resolved.symbol.start + resolved.symbol.length);
+          }
+
+          return Location.create(resolved.uri, range);
+        }
+      }
+
+      // Variable reference
+      const variableKey = this.getVariableKeyAST(context, word);
+      if (variableKey) {
+        const resolved = this.symbolResolver.resolveVariableReference(
+          doc.uri,
+          variableKey.varType,
+          word,
+          (uri) => this.workspace.getDocument(uri)
+        );
+
+        if (resolved) {
+          const range = {
+            start: Position.create(0, 0),
+            end: Position.create(0, 0)
+          };
+
+          // Get the target document to calculate position
+          const targetMetadata = this.workspace.getDocument(resolved.uri);
+          if (targetMetadata) {
+            const targetDoc = {
+              uri: resolved.uri,
+              positionAt: (offset: number) => {
+                const text = targetMetadata.text;
+                let line = 0, col = 0;
+                for (let i = 0; i < offset && i < text.length; i++) {
+                  if (text[i] === '\n') {
+                    line++;
+                    col = 0;
+                  } else {
+                    col++;
+                  }
+                }
+                return Position.create(line, col);
+              }
+            } as any;
+
+            range.start = targetDoc.positionAt(resolved.symbol.start);
+            range.end = targetDoc.positionAt(resolved.symbol.start + resolved.symbol.length);
+          }
+
+          return Location.create(resolved.uri, range);
+        }
+      }
+    }
+
+    // Pipeline definition (local)
     if (context.kind === 'pipeline' || this.isPipelineContextAST(offset, doc)) {
       const hit = symbols.pipelinePositions.get(word);
       if (hit) {
@@ -360,7 +515,7 @@ export class LanguageProviders {
     if (context.kind === 'route' && context.node) {
       const whenNode = context.node as any;
       if (whenNode.kind === 'CallingRoute') {
-        const program = this.cache.getProgram(doc);
+        const program = this.workspace.getProgram(doc);
         const matchingRoute = this.findMatchingRoute(
           whenNode.method,
           whenNode.path,
@@ -395,8 +550,8 @@ export class LanguageProviders {
   }
 
   onRename(params: RenameParams, doc: TextDocument): WorkspaceEdit | null {
-    const text = this.cache.getText(doc);
-    const symbols = this.cache.getSymbols(doc);
+    const text = this.workspace.getText(doc);
+    const symbols = this.workspace.getSymbols(doc);
     const pos = params.position as Position;
     const offset = doc.offsetAt(pos);
     const wordInfo = getWordAt(text, offset);
@@ -575,7 +730,7 @@ export class LanguageProviders {
       return null;
     }
 
-    const program = this.cache.getProgram(doc);
+    const program = this.workspace.getProgram(doc);
     if (!program || !program.describes) {
       return null;
     }
@@ -598,7 +753,7 @@ export class LanguageProviders {
     }
 
     // Fallback to describe-level variables
-    const symbols = this.cache.getSymbols(doc);
+    const symbols = this.workspace.getSymbols(doc);
     let bestMatch: { describe: Describe; value: string; format: 'quoted' | 'backtick' | 'bare' } | null = null;
     let smallestRange = Infinity;
 
@@ -658,8 +813,8 @@ export class LanguageProviders {
       return null;
     }
 
-    const program = this.cache.getProgram(doc);
-    const symbols = this.cache.getSymbols(doc);
+    const program = this.workspace.getProgram(doc);
+    const symbols = this.workspace.getSymbols(doc);
 
     const testContext = findTestContextAtOffset(text, offset, program.describes);
 
@@ -738,7 +893,7 @@ export class LanguageProviders {
     }
 
     // Check if we're in a test when clause that executes a pipeline
-    const program = this.cache.getProgram(doc);
+    const program = this.workspace.getProgram(doc);
     for (const describe of program.describes) {
       for (const test of describe.tests) {
         const when = test.when;
@@ -890,7 +1045,7 @@ export class LanguageProviders {
 
   private formatVariableHover(text: string, varType: string, varName: string, doc: TextDocument): string | null {
     // Use AST to find the exact boundaries of the variable
-    const program = this.cache.getProgram(doc);
+    const program = this.workspace.getProgram(doc);
     const variable = program.variables.find(v => v.varType === varType && v.name === varName);
     if (!variable) return null;
 
@@ -901,7 +1056,7 @@ export class LanguageProviders {
 
   private formatPipelineHover(text: string, pipelineName: string, doc: TextDocument): string | null {
     // Use AST to find the exact boundaries of the pipeline
-    const program = this.cache.getProgram(doc);
+    const program = this.workspace.getProgram(doc);
     const pipeline = program.pipelines.find(p => p.name === pipelineName);
     if (!pipeline) return null;
 
@@ -912,7 +1067,7 @@ export class LanguageProviders {
 
   private formatGraphQLHover(text: string, resolverType: string, resolverName: string, doc: TextDocument): string | null {
     // Use AST to find the exact boundaries of the resolver
-    const program = this.cache.getProgram(doc);
+    const program = this.workspace.getProgram(doc);
     const resolvers = resolverType === 'query' ? program.queries : program.mutations;
 
     const resolver = resolvers.find(r => r.name === resolverName);
@@ -1009,7 +1164,7 @@ export class LanguageProviders {
     doc: TextDocument,
     offset: number
   ): Location | null {
-    const text = this.cache.getText(doc);
+    const text = this.workspace.getText(doc);
 
     // Handle mock context
     if (context.kind === 'mock' && context.node) {
@@ -1105,7 +1260,7 @@ export class LanguageProviders {
     }
 
     // Get the program to access test structures
-    const program = this.cache.getProgram(doc);
+    const program = this.workspace.getProgram(doc);
     if (!program || !program.describes) {
       return null;
     }
@@ -1131,7 +1286,7 @@ export class LanguageProviders {
 
     // No test context - try matching against describe-level variables
     // Strategy: Find the most specific (smallest) matching describe block
-    const symbols = this.cache.getSymbols(doc);
+    const symbols = this.workspace.getSymbols(doc);
 
     let bestMatch: { describe: Describe; value: string; format: 'quoted' | 'backtick' | 'bare' } | null = null;
     let smallestRange = Infinity;
@@ -1188,8 +1343,8 @@ export class LanguageProviders {
     }
 
     // Look up in symbol table with scope awareness
-    const program = this.cache.getProgram(doc);
-    const symbols = this.cache.getSymbols(doc);
+    const program = this.workspace.getProgram(doc);
+    const symbols = this.workspace.getSymbols(doc);
 
     // Try to find a test context first (if we're inside a test)
     const testContext = findTestContextAtOffset(text, offset, program.describes);
@@ -1329,7 +1484,7 @@ export class LanguageProviders {
     path: string,
     doc: TextDocument
   ): string | null {
-    const program = this.cache.getProgram(doc);
+    const program = this.workspace.getProgram(doc);
     const matchingRoute = this.findMatchingRoute(method, path, program.routes);
 
     if (!matchingRoute) return null;
@@ -1343,5 +1498,19 @@ export class LanguageProviders {
     }
 
     return createMarkdownCodeBlock('webpipe', snippet);
+  }
+
+  /**
+   * Extract code snippet from text at a given position
+   */
+  private extractCodeSnippet(text: string, position: { start: number; length: number }): string {
+    let snippet = text.slice(position.start, position.start + position.length).trimEnd();
+
+    // Truncate if too long
+    if (snippet.length > 2400) {
+      snippet = snippet.slice(0, 2400) + '\n…';
+    }
+
+    return snippet;
   }
 }

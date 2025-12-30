@@ -2,10 +2,10 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { CompletionItem, CompletionItemKind, Position, CompletionParams } from 'vscode-languageserver/node';
 import { KNOWN_MIDDLEWARE, KNOWN_STEPS, VALID_HTTP_METHODS, REGEX_PATTERNS } from './constants';
 import { collectHandlebarsSymbols } from './symbol-collector';
-import { DocumentCache } from './document-cache';
+import { WorkspaceManager } from './workspace-manager';
 
 export class CompletionProvider {
-  constructor(private cache: DocumentCache) {}
+  constructor(private cache: WorkspaceManager) {}
 
   onCompletion(params: CompletionParams, doc: TextDocument): CompletionItem[] {
     const text = this.cache.getText(doc);

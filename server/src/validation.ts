@@ -2,7 +2,8 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Diagnostic, DiagnosticSeverity, Connection } from 'vscode-languageserver/node';
 import { VALID_HTTP_METHODS, KNOWN_MIDDLEWARE, KNOWN_STEPS } from './constants';
 import { collectHandlebarsSymbols } from './symbol-collector';
-import { DocumentCache } from './document-cache';
+import { WorkspaceManager } from './workspace-manager';
+import { SymbolResolver } from './symbol-resolver';
 import { Describe, Variable, NamedPipeline, PipelineStep, Program } from 'webpipe-js';
 import { findTestContextAtOffset, extractHandlebarsVariables, extractJqVariables, escapeRegex } from './test-variable-utils';
 import { walkPipelineSteps } from './ast-utils';
@@ -12,10 +13,14 @@ interface DiagnosticPush {
 }
 
 export class DocumentValidator {
-  constructor(private connection: Connection, private cache: DocumentCache) {}
+  private symbolResolver: SymbolResolver;
+
+  constructor(private connection: Connection, private workspace: WorkspaceManager) {
+    this.symbolResolver = new SymbolResolver();
+  }
 
   async validateDocument(doc: TextDocument): Promise<void> {
-    const text = this.cache.getText(doc);
+    const text = this.workspace.getText(doc);
     const diagnostics: Diagnostic[] = [];
 
     this.validateTrailingNewline(text, doc, diagnostics);
@@ -50,7 +55,7 @@ export class DocumentValidator {
       };
 
       // Get cached parse result
-      const { program, diagnostics: parseDiagnostics } = this.cache.get(doc);
+      const { program, diagnostics: parseDiagnostics } = this.workspace.get(doc);
       for (const d of parseDiagnostics) {
         push(
           d.severity === 'error' ? DiagnosticSeverity.Error : d.severity === 'warning' ? DiagnosticSeverity.Warning : DiagnosticSeverity.Information,
@@ -63,14 +68,17 @@ export class DocumentValidator {
       const { variablesByType, pipelineNames } = this.collectDeclarations(push, program);
       const routePatterns = this.validateRoutes(push, program);
 
+      // Validate import paths (multi-file support)
+      this.validateImportPaths(program, doc, push);
+
       // Unified AST-based step validation (includes auth flows, result blocks, variable/pipeline refs, unknown steps)
-      this.validatePipelineSteps(program, variablesByType, pipelineNames, push);
+      this.validatePipelineSteps(program, variablesByType, pipelineNames, push, doc);
 
       // Unified AST-based BDD validation (replaces regex-based when clause validation)
-      this.validateBDDReferences(program, variablesByType, pipelineNames, routePatterns, push);
+      this.validateBDDReferences(program, variablesByType, pipelineNames, routePatterns, push, doc);
 
       // Unified AST-based mock validation
-      this.validateMockReferences(program, variablesByType, pipelineNames, push);
+      this.validateMockReferences(program, variablesByType, pipelineNames, push, doc);
 
       this.validateJsonBlocks(text, push);
       this.validateMiddlewareReferences(text, push);
@@ -247,10 +255,37 @@ export class DocumentValidator {
   }
 
   /**
+   * Validates import paths (multi-file support)
+   * Checks: import files exist, no circular imports
+   */
+  private validateImportPaths(program: Program, doc: TextDocument, push: DiagnosticPush): void {
+    if (!program.imports || program.imports.length === 0) {
+      return;
+    }
+
+    const metadata = this.workspace.getDocument(doc.uri);
+    if (!metadata) {
+      return;
+    }
+
+    // Validate each import
+    for (let i = 0; i < program.imports.length; i++) {
+      const imp = program.imports[i];
+      const resolved = metadata.imports[i];
+
+      if (!resolved || !resolved.resolved) {
+        // Import resolution failed
+        const errorMsg = resolved?.error || `Import file not found: ${imp.path}`;
+        push(DiagnosticSeverity.Error, imp.start, imp.end, errorMsg);
+      }
+    }
+  }
+
+  /**
    * Validates all pipeline steps using AST traversal.
    * Checks: variable references, pipeline references, unknown step names, auth flows, and result branches.
    */
-  private validatePipelineSteps(program: Program, variablesByType: Map<string, Set<string>>, pipelineNames: Set<string>, push: DiagnosticPush): void {
+  private validatePipelineSteps(program: Program, variablesByType: Map<string, Set<string>>, pipelineNames: Set<string>, push: DiagnosticPush, doc: TextDocument): void {
     for (const step of walkPipelineSteps(program)) {
       // Handle Regular steps
       if (step.kind === 'Regular') {
@@ -260,10 +295,28 @@ export class DocumentValidator {
         if (stepName === 'pipeline' || stepName === 'loader') {
           if (step.configType === 'identifier') {
             const name = step.config;
-            // Skip validation for scoped references (e.g., "test::test")
-            // These will be validated in Phase 3 with full cross-file support
-            if (!name.includes('::') && !pipelineNames.has(name)) {
-              const configStart = step.configStart ?? step.start;
+            const configStart = step.configStart ?? step.start;
+
+            // Handle scoped references (cross-file)
+            if (this.symbolResolver.isScoped(name)) {
+              const resolved = this.symbolResolver.resolveReference(
+                doc.uri,
+                name,
+                (uri) => this.workspace.getDocument(uri)
+              );
+
+              if (!resolved) {
+                const alias = this.symbolResolver.getAlias(name);
+                const symbolName = this.symbolResolver.getSymbolName(name);
+                const metadata = this.workspace.getDocument(doc.uri);
+                const hasImport = metadata?.imports?.some(i => i.alias === alias);
+                const msg = hasImport
+                  ? `Pipeline '${symbolName}' not found in module '${alias}'`
+                  : `Unknown import alias '${alias}'`;
+                push(DiagnosticSeverity.Error, configStart, configStart + name.length, msg);
+              }
+            } else if (!pipelineNames.has(name)) {
+              // Local reference - validate as before
               push(DiagnosticSeverity.Error, configStart, configStart + name.length, `Unknown pipeline: ${name}`);
             }
           }
@@ -283,11 +336,33 @@ export class DocumentValidator {
         // Validate variable references (|> pg: myQuery)
         if (step.configType === 'identifier') {
           const varName = step.config;
-          const declared = variablesByType.get(stepName);
-          // Skip validation for scoped references (e.g., "db::query")
-          if (!varName.includes('::') && (!declared || !declared.has(varName))) {
-            const configStart = step.configStart ?? step.start;
-            push(DiagnosticSeverity.Error, configStart, configStart + varName.length, `Unknown ${stepName} variable: ${varName}`);
+          const configStart = step.configStart ?? step.start;
+
+          // Handle scoped references (cross-file)
+          if (this.symbolResolver.isScoped(varName)) {
+            const resolved = this.symbolResolver.resolveVariableReference(
+              doc.uri,
+              stepName,
+              varName,
+              (uri) => this.workspace.getDocument(uri)
+            );
+
+            if (!resolved) {
+              const alias = this.symbolResolver.getAlias(varName);
+              const symbolName = this.symbolResolver.getSymbolName(varName);
+              const metadata = this.workspace.getDocument(doc.uri);
+              const hasImport = metadata?.imports?.some(i => i.alias === alias);
+              const msg = hasImport
+                ? `Variable '${symbolName}' not found in module '${alias}'`
+                : `Unknown import alias '${alias}'`;
+              push(DiagnosticSeverity.Error, configStart, configStart + varName.length, msg);
+            }
+          } else {
+            // Local reference - validate as before
+            const declared = variablesByType.get(stepName);
+            if (!declared || !declared.has(varName)) {
+              push(DiagnosticSeverity.Error, configStart, configStart + varName.length, `Unknown ${stepName} variable: ${varName}`);
+            }
           }
         }
 
@@ -329,7 +404,7 @@ export class DocumentValidator {
   /**
    * Validates test 'when' clauses using AST.
    */
-  private validateBDDReferences(program: Program, variablesByType: Map<string, Set<string>>, pipelineNames: Set<string>, routePatterns: Array<{ method: string; path: string; regex: RegExp }>, push: DiagnosticPush): void {
+  private validateBDDReferences(program: Program, variablesByType: Map<string, Set<string>>, pipelineNames: Set<string>, routePatterns: Array<{ method: string; path: string; regex: RegExp }>, push: DiagnosticPush, doc: TextDocument): void {
     if (!program) return;
 
     for (const describe of program.describes) {
@@ -338,16 +413,51 @@ export class DocumentValidator {
 
         if (when.kind === 'ExecutingPipeline') {
           // Validate: when executing pipeline <name>
-          // Skip validation for scoped references (e.g., "test::test")
-          if (!when.name.includes('::') && !pipelineNames.has(when.name)) {
+          if (this.symbolResolver.isScoped(when.name)) {
+            const resolved = this.symbolResolver.resolveReference(
+              doc.uri,
+              when.name,
+              (uri) => this.workspace.getDocument(uri)
+            );
+
+            if (!resolved) {
+              const alias = this.symbolResolver.getAlias(when.name);
+              const symbolName = this.symbolResolver.getSymbolName(when.name);
+              const metadata = this.workspace.getDocument(doc.uri);
+              const hasImport = metadata?.imports?.some(i => i.alias === alias);
+              const msg = hasImport
+                ? `Pipeline '${symbolName}' not found in module '${alias}'`
+                : `Unknown import alias '${alias}'`;
+              push(DiagnosticSeverity.Error, when.nameStart, when.nameStart + when.name.length, msg);
+            }
+          } else if (!pipelineNames.has(when.name)) {
             push(DiagnosticSeverity.Error, when.nameStart, when.nameStart + when.name.length, `Unknown pipeline: ${when.name}`);
           }
         } else if (when.kind === 'ExecutingVariable') {
           // Validate: when executing variable <type> <name>
-          const declared = variablesByType.get(when.varType);
-          // Skip validation for scoped references (e.g., "db::query")
-          if (!when.name.includes('::') && (!declared || !declared.has(when.name))) {
-            push(DiagnosticSeverity.Error, when.nameStart, when.nameStart + when.name.length, `Unknown ${when.varType} variable: ${when.name}`);
+          if (this.symbolResolver.isScoped(when.name)) {
+            const resolved = this.symbolResolver.resolveVariableReference(
+              doc.uri,
+              when.varType,
+              when.name,
+              (uri) => this.workspace.getDocument(uri)
+            );
+
+            if (!resolved) {
+              const alias = this.symbolResolver.getAlias(when.name);
+              const symbolName = this.symbolResolver.getSymbolName(when.name);
+              const metadata = this.workspace.getDocument(doc.uri);
+              const hasImport = metadata?.imports?.some(i => i.alias === alias);
+              const msg = hasImport
+                ? `Variable '${symbolName}' not found in module '${alias}'`
+                : `Unknown import alias '${alias}'`;
+              push(DiagnosticSeverity.Error, when.nameStart, when.nameStart + when.name.length, msg);
+            }
+          } else {
+            const declared = variablesByType.get(when.varType);
+            if (!declared || !declared.has(when.name)) {
+              push(DiagnosticSeverity.Error, when.nameStart, when.nameStart + when.name.length, `Unknown ${when.varType} variable: ${when.name}`);
+            }
           }
         } else if (when.kind === 'CallingRoute') {
           // Validate: when calling METHOD /path
@@ -372,7 +482,7 @@ export class DocumentValidator {
    * Validates mock references using AST.
    * Builds GraphQL schema info from AST, then validates all mocks in tests.
    */
-  private validateMockReferences(program: Program, variablesByType: Map<string, Set<string>>, pipelineNames: Set<string>, push: DiagnosticPush): void {
+  private validateMockReferences(program: Program, variablesByType: Map<string, Set<string>>, pipelineNames: Set<string>, push: DiagnosticPush, doc: TextDocument): void {
     if (!program) return;
 
     // Build GraphQL resolver sets from AST
@@ -411,13 +521,13 @@ export class DocumentValidator {
     for (const describe of program.describes) {
       // Validate describe-level mocks
       for (const mock of describe.mocks) {
-        this.validateMock(mock, variablesByType, pipelineNames, queries, mutations, push);
+        this.validateMock(mock, variablesByType, pipelineNames, queries, mutations, push, doc);
       }
 
       // Validate test-level mocks
       for (const test of describe.tests) {
         for (const mock of test.mocks) {
-          this.validateMock(mock, variablesByType, pipelineNames, queries, mutations, push);
+          this.validateMock(mock, variablesByType, pipelineNames, queries, mutations, push, doc);
         }
       }
     }
@@ -436,16 +546,35 @@ export class DocumentValidator {
     pipelineNames: Set<string>,
     queries: Set<string>,
     mutations: Set<string>,
-    push: DiagnosticPush
+    push: DiagnosticPush,
+    doc: TextDocument
   ): void {
     const target = mock.target;
 
     // Mock pipeline: "pipeline Name"
     if (target.startsWith('pipeline ')) {
       const name = target.substring('pipeline '.length);
-      // Skip validation for scoped references (e.g., "test::test")
-      if (!name.includes('::') && !pipelineNames.has(name)) {
-        push(DiagnosticSeverity.Error, mock.targetStart + 'pipeline '.length, mock.targetStart + target.length, `Unknown pipeline in mock: ${name}`);
+      const nameStart = mock.targetStart + 'pipeline '.length;
+
+      if (this.symbolResolver.isScoped(name)) {
+        const resolved = this.symbolResolver.resolveReference(
+          doc.uri,
+          name,
+          (uri) => this.workspace.getDocument(uri)
+        );
+
+        if (!resolved) {
+          const alias = this.symbolResolver.getAlias(name);
+          const symbolName = this.symbolResolver.getSymbolName(name);
+          const metadata = this.workspace.getDocument(doc.uri);
+          const hasImport = metadata?.imports?.some(i => i.alias === alias);
+          const msg = hasImport
+            ? `Pipeline '${symbolName}' not found in module '${alias}'`
+            : `Unknown import alias '${alias}'`;
+          push(DiagnosticSeverity.Error, nameStart, mock.targetStart + target.length, msg);
+        }
+      } else if (!pipelineNames.has(name)) {
+        push(DiagnosticSeverity.Error, nameStart, mock.targetStart + target.length, `Unknown pipeline in mock: ${name}`);
       }
       return;
     }
@@ -478,10 +607,31 @@ export class DocumentValidator {
         return;
       }
 
-      const declared = variablesByType.get(varType);
-      // Skip validation for scoped references (e.g., "db::query")
-      if (!varName.includes('::') && (!declared || !declared.has(varName))) {
-        push(DiagnosticSeverity.Error, mock.targetStart + dotIndex + 1, mock.targetStart + target.length, `Unknown ${varType} variable in mock: ${varName}`);
+      const nameStart = mock.targetStart + dotIndex + 1;
+
+      if (this.symbolResolver.isScoped(varName)) {
+        const resolved = this.symbolResolver.resolveVariableReference(
+          doc.uri,
+          varType,
+          varName,
+          (uri) => this.workspace.getDocument(uri)
+        );
+
+        if (!resolved) {
+          const alias = this.symbolResolver.getAlias(varName);
+          const symbolName = this.symbolResolver.getSymbolName(varName);
+          const metadata = this.workspace.getDocument(doc.uri);
+          const hasImport = metadata?.imports?.some(i => i.alias === alias);
+          const msg = hasImport
+            ? `Variable '${symbolName}' not found in module '${alias}'`
+            : `Unknown import alias '${alias}'`;
+          push(DiagnosticSeverity.Error, nameStart, mock.targetStart + target.length, msg);
+        }
+      } else {
+        const declared = variablesByType.get(varType);
+        if (!declared || !declared.has(varName)) {
+          push(DiagnosticSeverity.Error, nameStart, mock.targetStart + target.length, `Unknown ${varType} variable in mock: ${varName}`);
+        }
       }
     }
   }
