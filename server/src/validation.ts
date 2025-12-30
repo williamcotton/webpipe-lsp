@@ -260,7 +260,9 @@ export class DocumentValidator {
         if (stepName === 'pipeline' || stepName === 'loader') {
           if (step.configType === 'identifier') {
             const name = step.config;
-            if (!pipelineNames.has(name)) {
+            // Skip validation for scoped references (e.g., "test::test")
+            // These will be validated in Phase 3 with full cross-file support
+            if (!name.includes('::') && !pipelineNames.has(name)) {
               const configStart = step.configStart ?? step.start;
               push(DiagnosticSeverity.Error, configStart, configStart + name.length, `Unknown pipeline: ${name}`);
             }
@@ -282,7 +284,8 @@ export class DocumentValidator {
         if (step.configType === 'identifier') {
           const varName = step.config;
           const declared = variablesByType.get(stepName);
-          if (!declared || !declared.has(varName)) {
+          // Skip validation for scoped references (e.g., "db::query")
+          if (!varName.includes('::') && (!declared || !declared.has(varName))) {
             const configStart = step.configStart ?? step.start;
             push(DiagnosticSeverity.Error, configStart, configStart + varName.length, `Unknown ${stepName} variable: ${varName}`);
           }
@@ -335,13 +338,15 @@ export class DocumentValidator {
 
         if (when.kind === 'ExecutingPipeline') {
           // Validate: when executing pipeline <name>
-          if (!pipelineNames.has(when.name)) {
+          // Skip validation for scoped references (e.g., "test::test")
+          if (!when.name.includes('::') && !pipelineNames.has(when.name)) {
             push(DiagnosticSeverity.Error, when.nameStart, when.nameStart + when.name.length, `Unknown pipeline: ${when.name}`);
           }
         } else if (when.kind === 'ExecutingVariable') {
           // Validate: when executing variable <type> <name>
           const declared = variablesByType.get(when.varType);
-          if (!declared || !declared.has(when.name)) {
+          // Skip validation for scoped references (e.g., "db::query")
+          if (!when.name.includes('::') && (!declared || !declared.has(when.name))) {
             push(DiagnosticSeverity.Error, when.nameStart, when.nameStart + when.name.length, `Unknown ${when.varType} variable: ${when.name}`);
           }
         } else if (when.kind === 'CallingRoute') {
@@ -438,7 +443,8 @@ export class DocumentValidator {
     // Mock pipeline: "pipeline Name"
     if (target.startsWith('pipeline ')) {
       const name = target.substring('pipeline '.length);
-      if (!pipelineNames.has(name)) {
+      // Skip validation for scoped references (e.g., "test::test")
+      if (!name.includes('::') && !pipelineNames.has(name)) {
         push(DiagnosticSeverity.Error, mock.targetStart + 'pipeline '.length, mock.targetStart + target.length, `Unknown pipeline in mock: ${name}`);
       }
       return;
@@ -473,7 +479,8 @@ export class DocumentValidator {
       }
 
       const declared = variablesByType.get(varType);
-      if (!declared || !declared.has(varName)) {
+      // Skip validation for scoped references (e.g., "db::query")
+      if (!varName.includes('::') && (!declared || !declared.has(varName))) {
         push(DiagnosticSeverity.Error, mock.targetStart + dotIndex + 1, mock.targetStart + target.length, `Unknown ${varType} variable in mock: ${varName}`);
       }
     }
