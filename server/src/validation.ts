@@ -65,27 +65,30 @@ export class DocumentValidator {
         );
       }
 
+      // Get merged program for GraphQL validation (includes imported schemas/resolvers)
+      const mergedProgram = this.workspace.mergeGraphQLFromImports(doc.uri) || program;
+
       const { variablesByType, pipelineNames } = this.collectDeclarations(push, program);
-      const routePatterns = this.validateRoutes(push, program);
+      const routePatterns = this.validateRoutes(push, program, doc, mergedProgram);
 
       // Validate import paths (multi-file support)
       this.validateImportPaths(program, doc, push);
 
       // Unified AST-based step validation (includes auth flows, result blocks, variable/pipeline refs, unknown steps)
-      this.validatePipelineSteps(program, variablesByType, pipelineNames, push, doc);
+      this.validatePipelineSteps(mergedProgram, variablesByType, pipelineNames, push, doc);
 
       // Unified AST-based BDD validation (replaces regex-based when clause validation)
       this.validateBDDReferences(program, variablesByType, pipelineNames, routePatterns, push, doc);
 
       // Unified AST-based mock validation
-      this.validateMockReferences(program, variablesByType, pipelineNames, push, doc);
+      this.validateMockReferences(mergedProgram, variablesByType, pipelineNames, push, doc);
 
       this.validateJsonBlocks(text, push);
       this.validateMiddlewareReferences(text, push);
       this.validateConfigBlocks(text, push, program);
       this.validateUnknownVariableTypes(text, push, program);
       this.validateAssertions(text, push);
-      this.validateHandlebarsPartialReferences(text, push, program);
+      this.validateHandlebarsPartialReferences(text, push, program, doc);
       this.validateJoinAsyncReferences(program, text, push);
       this.validateTestLetVariables(text, push, program);
 
@@ -187,7 +190,7 @@ export class DocumentValidator {
     return { variablesByType, pipelineNames };
   }
 
-  private validateRoutes(push: DiagnosticPush, program?: Program): Array<{ method: string; path: string; regex: RegExp }> {
+  private validateRoutes(push: DiagnosticPush, program: Program | undefined, doc: TextDocument, mergedProgram: Program | undefined): Array<{ method: string; path: string; regex: RegExp }> {
     const routePatterns: Array<{ method: string; path: string; regex: RegExp }> = [];
 
     if (!program) return routePatterns;
@@ -226,9 +229,12 @@ export class DocumentValidator {
 
     // Add automatic GraphQL endpoint if configured
     // This mirrors the server behavior in server.rs lines 335-369
-    const graphqlConfig = program.configs.find(c => c.name === 'graphql');
-    if (graphqlConfig && program.graphqlSchema) {
-      const endpointProp = graphqlConfig.properties.find(p => p.key === 'endpoint');
+    // Get all configs including imported ones
+    const allConfigs = this.workspace.getAllConfigs(doc.uri);
+    const graphqlConfig = allConfigs.find((c: any) => c.name === 'graphql');
+    // Use merged program (passed as parameter) to check for GraphQL schema (includes imported schemas)
+    if (graphqlConfig && mergedProgram && mergedProgram.graphqlSchema) {
+      const endpointProp = graphqlConfig.properties.find((p: any) => p.key === 'endpoint');
       if (endpointProp && endpointProp.value.kind === 'String') {
         const endpoint = endpointProp.value.value;
         const routeKey = `POST ${endpoint}`;
@@ -239,7 +245,7 @@ export class DocumentValidator {
 
           // Build matching regex for calls
           const pattern = '^' + endpoint
-            .replace(/[.*+?^${}()|[\]\\]/g, (ch) => `\\${ch}`)
+            .replace(/[.*+?^${}()|[\]\\]/g, (ch: string) => `\\${ch}`)
             .replace(/:(?:[A-Za-z_][\w-]*)/g, '[^/]+') + '$';
 
           try {
@@ -670,7 +676,9 @@ export class DocumentValidator {
 
     // Malformed mock syntax
     const mockHeadLineRe = /(^|\n)(\s*(with|and)\s+mock\b[^\n]*)/g;
-    const mockHeadValid = /^(with|and)\s+mock\s+(?:pipeline\s+[A-Za-z_][\w-]*|(?:query|mutation)\s+[A-Za-z_][\w-]*|[A-Za-z_][\w-]*\.[A-Za-z_][\w-]*|[A-Za-z_][\w-]*)\s+returning\s+`/;
+    // Allow scoped identifiers with :: in variable names (e.g., pg.db::listUsers)
+    const scopedIdent = '[A-Za-z_][\\w-]*(?:::[A-Za-z_][\\w-]*)?';
+    const mockHeadValid = new RegExp(`^(with|and)\\s+mock\\s+(?:pipeline\\s+${scopedIdent}|(?:query|mutation)\\s+${scopedIdent}|[A-Za-z_][\\w-]*\\.${scopedIdent}|[A-Za-z_][\\w-]*)\\s+returning\\s+\``);
     for (let m; (m = mockHeadLineRe.exec(text)); ) {
       const lineStart = m.index + (m[1] ? m[1].length : 0);
       const head = m[2].trim();
@@ -770,13 +778,44 @@ export class DocumentValidator {
     }
   }
 
-  private validateHandlebarsPartialReferences(text: string, push: DiagnosticPush, program?: any): void {
+  private validateHandlebarsPartialReferences(text: string, push: DiagnosticPush, program?: any, doc?: TextDocument): void {
     if (!program) return;
     const hb = collectHandlebarsSymbols(text, program);
+
+    // Collect imported Handlebars partials (converted from :: to / for Handlebars compatibility)
+    const importedPartials = new Set<string>();
+    if (doc && program.imports) {
+      // Get the file metadata which has resolved imports
+      const metadata = this.workspace.getDocument(doc.uri);
+      if (metadata && metadata.imports) {
+        for (const resolvedImport of metadata.imports) {
+          if (resolvedImport.resolved && resolvedImport.uri) {
+            // Ensure the imported file is loaded
+            this.workspace.ensureImportLoaded(resolvedImport.uri);
+            const importedMeta = this.workspace.getDocument(resolvedImport.uri);
+
+            if (importedMeta && importedMeta.program && importedMeta.program.variables) {
+              for (const v of importedMeta.program.variables) {
+                if (v.varType === 'handlebars' || v.varType === 'mustache') {
+                  // Imported partials are registered as namespace/name (Handlebars syntax)
+                  const partialName = `${resolvedImport.alias}/${v.name}`;
+                  importedPartials.add(partialName);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
     for (const [name, uses] of hb.usagesByName.entries()) {
       const hasGlobalDecl = hb.declByName.has(name);
       // Any inline decl anywhere in the file (best-effort since scope can cross into called partials)
       const hasAnyInlineDecl = hb.inlineDefsByContent.some(entry => entry.inlineByName.has(name) || entry.inlineBlockByName.has(name));
+
+      // Check if it's an imported partial
+      const hasImportedDecl = importedPartials.has(name);
+
       for (const u of uses) {
         // Inline def within same content block
         let hasInlineDeclInSameBlock = false;
@@ -788,7 +827,7 @@ export class DocumentValidator {
             break;
           }
         }
-        if (!hasInlineDeclInSameBlock && !hasGlobalDecl && !hasAnyInlineDecl) {
+        if (!hasInlineDeclInSameBlock && !hasGlobalDecl && !hasAnyInlineDecl && !hasImportedDecl) {
           push(
             DiagnosticSeverity.Warning,
             u.start,

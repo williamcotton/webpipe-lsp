@@ -154,14 +154,34 @@ export class WorkspaceManager {
     // Parse the document
     const { program, diagnostics } = parseProgramWithDiagnostics(text);
 
-    // Build symbol table
-    const symbols = buildSymbolTable(program, text);
+    // Resolve imports (but don't load them yet - lazy loading)
+    const imports = this.resolveImports(uri, program);
+
+    // Create preliminary metadata (needed for merging GraphQL)
+    const preliminaryMetadata: FileMetadata = {
+      version,
+      text,
+      program,
+      diagnostics,
+      symbols: this.getEmptySymbolTable(), // Will be replaced
+      timestamp: Date.now(),
+      imports,
+      exportedSymbols: { variables: new Map(), pipelines: new Set(), queries: new Set(), mutations: new Set() }, // Will be replaced
+      dependents: cached?.dependents || new Set(),
+      isOpen
+    };
+
+    // Temporarily cache for import resolution in mergeGraphQLFromImports
+    this.cache.set(uri, preliminaryMetadata);
+
+    // Merge GraphQL from imports
+    const mergedProgram = this.mergeGraphQLFromImports(uri) || program;
+
+    // Build symbol table from merged program (includes imported GraphQL resolvers)
+    const symbols = buildSymbolTable(mergedProgram, text);
 
     // Extract exported symbols
     const exportedSymbols = this.extractExportedSymbols(program);
-
-    // Resolve imports (but don't load them yet - lazy loading)
-    const imports = this.resolveImports(uri, program);
 
     // Create metadata
     const metadata: FileMetadata = {
@@ -274,6 +294,103 @@ export class WorkspaceManager {
     }
 
     return resolvedImports;
+  }
+
+  /**
+   * Get all configs for a file including imported configs
+   * Imported configs come first, then main file configs (so main can override)
+   */
+  getAllConfigs(uri: string): any[] {
+    const metadata = this.cache.get(uri);
+    if (!metadata) {
+      return [];
+    }
+
+    const allConfigs: any[] = [];
+
+    // Collect configs from imports first
+    for (const imp of metadata.imports) {
+      if (imp.resolved && imp.uri) {
+        // Ensure imported file is loaded
+        this.ensureImportLoaded(imp.uri);
+        const importedMeta = this.cache.get(imp.uri);
+        if (importedMeta && importedMeta.program && importedMeta.program.configs) {
+          allConfigs.push(...importedMeta.program.configs);
+        }
+      }
+    }
+
+    // Add main file configs (so they can override imported ones)
+    if (metadata.program && metadata.program.configs) {
+      allConfigs.push(...metadata.program.configs);
+    }
+
+    return allConfigs;
+  }
+
+  /**
+   * Merge GraphQL schemas and resolvers from imported modules
+   * Returns a new program with merged GraphQL schema, queries, mutations, and resolvers
+   */
+  mergeGraphQLFromImports(uri: string): Program | null {
+    const metadata = this.cache.get(uri);
+    if (!metadata || !metadata.program) {
+      return null;
+    }
+
+    // Clone the program
+    const mergedProgram = { ...metadata.program };
+    const schemaParts: string[] = [];
+
+    // Add main program's schema if it exists
+    if (metadata.program.graphqlSchema) {
+      schemaParts.push(metadata.program.graphqlSchema.sdl);
+    }
+
+    // Clone arrays to avoid mutating the original
+    mergedProgram.queries = [...(metadata.program.queries || [])];
+    mergedProgram.mutations = [...(metadata.program.mutations || [])];
+    mergedProgram.resolvers = [...(metadata.program.resolvers || [])];
+
+    // Collect from imports
+    for (const imp of metadata.imports) {
+      if (imp.resolved && imp.uri) {
+        // Ensure imported file is loaded
+        this.ensureImportLoaded(imp.uri);
+        const importedMeta = this.cache.get(imp.uri);
+
+        if (importedMeta && importedMeta.program) {
+          // Merge GraphQL schema
+          if (importedMeta.program.graphqlSchema) {
+            schemaParts.push(importedMeta.program.graphqlSchema.sdl);
+          }
+
+          // Merge query resolvers
+          if (importedMeta.program.queries) {
+            mergedProgram.queries.push(...importedMeta.program.queries);
+          }
+
+          // Merge mutation resolvers
+          if (importedMeta.program.mutations) {
+            mergedProgram.mutations.push(...importedMeta.program.mutations);
+          }
+
+          // Merge type resolvers
+          if (importedMeta.program.resolvers) {
+            mergedProgram.resolvers.push(...importedMeta.program.resolvers);
+          }
+        }
+      }
+    }
+
+    // Combine all schema parts into a single schema
+    if (schemaParts.length > 0) {
+      mergedProgram.graphqlSchema = {
+        sdl: schemaParts.join('\n\n')
+      };
+    }
+
+    return mergedProgram;
   }
 
   /**

@@ -982,6 +982,41 @@ export class LanguageProviders {
               if (fullPos) defRange = { start: fullPos.start, end: fullPos.start + fullPos.length };
               else defRange = { start: decl.nameStart, end: decl.nameEnd };
               hoverLang = 'webpipe';
+            } else {
+              // Check for imported partial (namespace/name format)
+              const slashIndex = name.indexOf('/');
+              if (slashIndex > 0) {
+                const namespace = name.substring(0, slashIndex);
+                const partialName = name.substring(slashIndex + 1);
+
+                // Find the import with this alias
+                const program = this.workspace.getProgram(doc);
+                if (program.imports) {
+                  const importDecl = program.imports.find((imp: any) => imp.alias === namespace);
+                  if (importDecl) {
+                    // Resolve the imported file
+                    const metadata = this.workspace.getDocument(doc.uri);
+                    if (metadata && metadata.imports) {
+                      const resolvedImport = metadata.imports.find((imp: any) => imp.alias === namespace);
+                      if (resolvedImport && resolvedImport.resolved && resolvedImport.uri) {
+                        this.workspace.ensureImportLoaded(resolvedImport.uri);
+                        const importedMeta = this.workspace.getDocument(resolvedImport.uri);
+                        if (importedMeta && importedMeta.symbols && importedMeta.text) {
+                          const importedHandlebars = importedMeta.symbols.variablePositions.get('handlebars');
+                          const importedPos = importedHandlebars?.get(partialName);
+                          if (importedPos) {
+                            const importedText = importedMeta.text;
+                            defRange = { start: importedPos.start, end: importedPos.start + importedPos.length };
+                            const snippet = importedText.slice(defRange.start, defRange.end);
+                            const md = createMarkdownCodeBlock('webpipe', snippet);
+                            return { contents: { kind: MarkupKind.Markdown, value: md } };
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
           
@@ -1016,6 +1051,50 @@ export class LanguageProviders {
           const decl = hb.declByName.get(name);
           if (decl) {
             return Location.create(doc.uri, { start: doc.positionAt(decl.nameStart), end: doc.positionAt(decl.nameEnd) });
+          }
+
+          // Check for imported partial (namespace/name format)
+          const slashIndex = name.indexOf('/');
+          if (slashIndex > 0) {
+            const namespace = name.substring(0, slashIndex);
+            const partialName = name.substring(slashIndex + 1);
+
+            // Find the import with this alias
+            const program = this.workspace.getProgram(doc);
+            if (program.imports) {
+              const importDecl = program.imports.find((imp: any) => imp.alias === namespace);
+              if (importDecl) {
+                // Resolve the imported file
+                const metadata = this.workspace.getDocument(doc.uri);
+                if (metadata && metadata.imports) {
+                  const resolvedImport = metadata.imports.find((imp: any) => imp.alias === namespace);
+                  if (resolvedImport && resolvedImport.resolved && resolvedImport.uri) {
+                    this.workspace.ensureImportLoaded(resolvedImport.uri);
+                    const importedMeta = this.workspace.getDocument(resolvedImport.uri);
+                    if (importedMeta && importedMeta.symbols && importedMeta.text) {
+                      const importedHandlebars = importedMeta.symbols.variablePositions.get('handlebars');
+                      const importedPos = importedHandlebars?.get(partialName);
+                      if (importedPos) {
+                        // Calculate the position of the variable name in the imported file
+                        const importedText = importedMeta.text;
+                        const nameStart = importedPos.start + 'handlebars '.length;
+                        const lines = importedText.substring(0, nameStart).split('\n');
+                        const line = lines.length - 1;
+                        const character = lines[lines.length - 1].length;
+
+                        return Location.create(
+                          resolvedImport.uri,
+                          {
+                            start: { line, character },
+                            end: { line, character: character + partialName.length }
+                          }
+                        );
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
