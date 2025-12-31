@@ -353,6 +353,7 @@ export class WorkspaceManager {
     mergedProgram.resolvers = [...(metadata.program.resolvers || [])];
     mergedProgram.routes = [...(metadata.program.routes || [])];
     mergedProgram.pipelines = [...(metadata.program.pipelines || [])];
+    mergedProgram.describes = [...(metadata.program.describes || [])];
 
     // Collect from imports
     for (const imp of metadata.imports) {
@@ -390,6 +391,11 @@ export class WorkspaceManager {
           // Merge pipelines from imports
           if (importedMeta.program.pipelines) {
             mergedProgram.pipelines.push(...importedMeta.program.pipelines);
+          }
+
+          // Merge test describes from imports
+          if (importedMeta.program.describes) {
+            mergedProgram.describes.push(...importedMeta.program.describes);
           }
         }
       }
