@@ -89,7 +89,8 @@ export class DocumentValidator {
       this.validateUnknownVariableTypes(text, push, program);
       this.validateAssertions(text, push);
       this.validateHandlebarsPartialReferences(text, push, program, doc);
-      this.validateJoinAsyncReferences(program, text, push);
+      // Use merged program to validate routes and pipelines from imports
+      this.validateJoinAsyncReferences(mergedProgram, text, push);
       this.validateTestLetVariables(text, push, program);
 
     } catch (e) {
@@ -195,9 +196,12 @@ export class DocumentValidator {
 
     if (!program) return routePatterns;
 
+    // Use merged program if available (includes routes from imports)
+    const programToValidate = mergedProgram || program;
+
     // Use AST to validate routes
     const routes = new Set<string>();
-    for (const route of program.routes) {
+    for (const route of programToValidate.routes) {
       const method = route.method;
       const path = route.path;
 

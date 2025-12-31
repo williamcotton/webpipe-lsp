@@ -329,8 +329,8 @@ export class WorkspaceManager {
   }
 
   /**
-   * Merge GraphQL schemas and resolvers from imported modules
-   * Returns a new program with merged GraphQL schema, queries, mutations, and resolvers
+   * Merge GraphQL schemas, routes, and pipelines from imported modules
+   * Returns a new program with merged GraphQL schema, queries, mutations, resolvers, routes, and pipelines
    */
   mergeGraphQLFromImports(uri: string): Program | null {
     const metadata = this.cache.get(uri);
@@ -351,6 +351,8 @@ export class WorkspaceManager {
     mergedProgram.queries = [...(metadata.program.queries || [])];
     mergedProgram.mutations = [...(metadata.program.mutations || [])];
     mergedProgram.resolvers = [...(metadata.program.resolvers || [])];
+    mergedProgram.routes = [...(metadata.program.routes || [])];
+    mergedProgram.pipelines = [...(metadata.program.pipelines || [])];
 
     // Collect from imports
     for (const imp of metadata.imports) {
@@ -378,6 +380,16 @@ export class WorkspaceManager {
           // Merge type resolvers
           if (importedMeta.program.resolvers) {
             mergedProgram.resolvers.push(...importedMeta.program.resolvers);
+          }
+
+          // Merge routes from imports
+          if (importedMeta.program.routes) {
+            mergedProgram.routes.push(...importedMeta.program.routes);
+          }
+
+          // Merge pipelines from imports
+          if (importedMeta.program.pipelines) {
+            mergedProgram.pipelines.push(...importedMeta.program.pipelines);
           }
         }
       }
