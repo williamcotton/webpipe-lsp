@@ -4,7 +4,9 @@ import {
   ProposedFeatures,
   InitializeParams,
   TextDocumentSyncKind,
-  InitializeResult
+  InitializeResult,
+  DidChangeWatchedFilesNotification,
+  FileChangeType
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DocumentValidator } from './validation';
@@ -58,6 +60,9 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 // Document event handlers
 documents.onDidChangeContent(async change => {
   await documentValidator.validateDocument(change.document);
+
+  // Also re-validate dependent files when this document changes
+  await workspaceManager.revalidateDependents(change.document.uri);
 });
 
 documents.onDidOpen(async open => {
@@ -68,9 +73,52 @@ connection.onInitialized(async () => {
   // Initialize file system watching
   await workspaceManager.initialize();
 
+  // Set up validation callback for file changes
+  workspaceManager.setValidationCallback(async (uri: string) => {
+    const doc = documents.get(uri);
+    if (doc) {
+      await documentValidator.validateDocument(doc);
+    }
+  });
+
+  // Register for file watching notifications
+  connection.client.register(DidChangeWatchedFilesNotification.type, {
+    watchers: [
+      {
+        globPattern: '**/*.wp'
+      }
+    ]
+  });
+
   // Validate all open documents once the server is ready
   for (const doc of documents.all()) {
     documentValidator.validateDocument(doc);
+  }
+});
+
+// Handle file system changes
+connection.onDidChangeWatchedFiles(async (params) => {
+  for (const change of params.changes) {
+    const uri = change.uri;
+
+    // Skip if this is an open document (handled by onDidChangeContent)
+    if (documents.get(uri)) {
+      continue;
+    }
+
+    switch (change.type) {
+      case FileChangeType.Changed:
+        // Reload the file and invalidate dependent files
+        await workspaceManager.handleFileChanged(uri);
+        break;
+      case FileChangeType.Deleted:
+        // Handle file deletion
+        await workspaceManager.handleFileDeleted(uri);
+        break;
+      case FileChangeType.Created:
+        // File created - no action needed until it's referenced
+        break;
+    }
   }
 });
 

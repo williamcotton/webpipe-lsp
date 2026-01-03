@@ -19,6 +19,7 @@ export class WorkspaceManager {
   private importResolver: ImportResolver;
   private invalidationQueue = new Map<string, NodeJS.Timeout>();
   private fileWatcher: any = null;
+  private validationCallback?: (uri: string) => Promise<void>;
 
   constructor(
     private connection: Connection,
@@ -29,13 +30,18 @@ export class WorkspaceManager {
   }
 
   /**
+   * Set a callback to trigger validation when files change
+   */
+  setValidationCallback(callback: (uri: string) => Promise<void>): void {
+    this.validationCallback = callback;
+  }
+
+  /**
    * Initialize file system watching
-   * Note: File watching for external changes will be implemented in a future update
+   * File watching is handled by the language server protocol
    */
   async initialize(): Promise<void> {
-    // File system watching can be implemented using vscode.workspace.createFileSystemWatcher
-    // For now, we rely on open document change events
-    console.log('WorkspaceManager initialized');
+    this.connection.console.log('WorkspaceManager initialized with file watching enabled');
   }
 
   /**
@@ -495,7 +501,7 @@ export class WorkspaceManager {
   /**
    * Reload a file from the file system
    */
-  private async reloadFromFileSystem(uri: string): Promise<void> {
+  async reloadFromFileSystem(uri: string): Promise<void> {
     try {
       const filePath = URI.parse(uri).fsPath;
       const text = await fs.promises.readFile(filePath, 'utf-8');
@@ -503,19 +509,80 @@ export class WorkspaceManager {
       const version = stats.mtimeMs; // Use mtime as version
 
       this.parseAndCache(uri, text, version, false);
+      this.connection.console.log(`Reloaded file from disk: ${uri}`);
     } catch (error) {
-      console.error(`Failed to reload file ${uri}:`, error);
+      this.connection.console.error(`Failed to reload file ${uri}: ${error}`);
     }
+  }
+
+  /**
+   * Re-validate all files that depend on the given URI
+   * Called when an open document changes
+   */
+  async revalidateDependents(uri: string): Promise<void> {
+    const meta = this.cache.get(uri);
+    if (!meta) {
+      return;
+    }
+
+    // Re-validate all dependent files
+    for (const dependentUri of meta.dependents) {
+      this.connection.console.log(`Re-validating dependent: ${dependentUri}`);
+
+      const dependentDoc = this.documents.get(dependentUri);
+      if (dependentDoc) {
+        // Invalidate cache to force re-parse with updated imports
+        this.cache.delete(dependentUri);
+
+        // Trigger validation callback to publish new diagnostics
+        if (this.validationCallback) {
+          await this.validationCallback(dependentUri);
+        }
+      }
+    }
+  }
+
+  /**
+   * Handle file changed event from file system watcher
+   */
+  async handleFileChanged(uri: string): Promise<void> {
+    this.connection.console.log(`File changed: ${uri}`);
+
+    // Reload the file from disk
+    await this.reloadFromFileSystem(uri);
+
+    // Re-validate dependent files
+    await this.revalidateDependents(uri);
   }
 
   /**
    * Handle file deletion
    */
-  private handleFileDeleted(uri: string): void {
+  async handleFileDeleted(uri: string): Promise<void> {
+    this.connection.console.log(`File deleted: ${uri}`);
+
+    const meta = this.cache.get(uri);
+
     // Remove from cache
     this.cache.delete(uri);
 
-    // TODO: Show diagnostics for files that import the deleted file
+    // Re-validate dependent files to show import errors
+    if (meta) {
+      for (const dependentUri of meta.dependents) {
+        this.connection.console.log(`Re-validating dependent after deletion: ${dependentUri}`);
+
+        const dependentDoc = this.documents.get(dependentUri);
+        if (dependentDoc) {
+          // Invalidate cache to force re-parse
+          this.cache.delete(dependentUri);
+
+          // Trigger validation callback to detect and publish import errors
+          if (this.validationCallback) {
+            await this.validationCallback(dependentUri);
+          }
+        }
+      }
+    }
   }
 
   /**
