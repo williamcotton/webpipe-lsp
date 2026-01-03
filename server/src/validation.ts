@@ -66,7 +66,7 @@ export class DocumentValidator {
       }
 
       // Get merged program for GraphQL validation (includes imported schemas/resolvers)
-      const mergedProgram = this.workspace.mergeGraphQLFromImports(doc.uri) || program;
+      const mergedProgram = this.workspace.computeMergedProgram(doc.uri) || program;
 
       const { variablesByType, pipelineNames } = this.collectDeclarations(push, program);
       const routePatterns = this.validateRoutes(push, program, doc, mergedProgram);

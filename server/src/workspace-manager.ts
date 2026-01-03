@@ -171,11 +171,11 @@ export class WorkspaceManager {
       isOpen
     };
 
-    // Temporarily cache for import resolution in mergeGraphQLFromImports
+    // Temporarily cache for import resolution in computeMergedProgram
     this.cache.set(uri, preliminaryMetadata);
 
     // Merge GraphQL from imports
-    const mergedProgram = this.mergeGraphQLFromImports(uri) || program;
+    const mergedProgram = this.computeMergedProgram(uri) || program;
 
     // Build symbol table from merged program (includes imported GraphQL resolvers)
     const symbols = buildSymbolTable(mergedProgram, text);
@@ -332,7 +332,7 @@ export class WorkspaceManager {
    * Merge GraphQL schemas, routes, and pipelines from imported modules
    * Returns a new program with merged GraphQL schema, queries, mutations, resolvers, routes, and pipelines
    */
-  mergeGraphQLFromImports(uri: string): Program | null {
+  computeMergedProgram(uri: string): Program | null {
     const metadata = this.cache.get(uri);
     if (!metadata || !metadata.program) {
       return null;
