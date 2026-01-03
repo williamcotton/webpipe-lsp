@@ -87,7 +87,7 @@ export class DocumentValidator {
       this.validateMiddlewareReferences(text, push);
       this.validateConfigBlocks(text, push, program);
       this.validateUnknownVariableTypes(text, push, program);
-      this.validateAssertions(text, push);
+      this.validateAssertions(text, push, program);
       this.validateHandlebarsPartialReferences(text, push, program, doc);
       // Use merged program to validate routes and pipelines from imports
       this.validateJoinAsyncReferences(mergedProgram, text, push);
@@ -692,16 +692,26 @@ export class DocumentValidator {
     }
   }
 
-  private validateAssertions(text: string, push: DiagnosticPush): void {
-    // Extract GraphQL schema for validation
-    const graphqlSchemaMatch = /graphqlSchema\s*=\s*`([\s\S]*?)`/m.exec(text);
+  private validateAssertions(text: string, push: DiagnosticPush, program?: Program): void {
+    if (!program) return;
+
+    // Extract from AST (NO REGEX on full document!)
     const queries = new Set<string>();
     const mutations = new Set<string>();
 
-    if (graphqlSchemaMatch) {
-      const schema = graphqlSchemaMatch[1];
+    // Extract query/mutation names from AST
+    for (const query of program.queries) {
+      queries.add(query.name);
+    }
+    for (const mutation of program.mutations) {
+      mutations.add(mutation.name);
+    }
 
-      // Extract query names
+    // Also extract from GraphQL schema if available
+    if (program.graphqlSchema) {
+      const schema = program.graphqlSchema.sdl;
+
+      // Extract query names from schema
       const queryTypeMatch = /type\s+Query\s*\{([^}]*)\}/s.exec(schema);
       if (queryTypeMatch) {
         const queryFields = queryTypeMatch[1].matchAll(/\s*([A-Za-z_][\w-]*)\s*(?:\([^)]*\))?\s*:\s*/g);
@@ -710,7 +720,7 @@ export class DocumentValidator {
         }
       }
 
-      // Extract mutation names
+      // Extract mutation names from schema
       const mutationTypeMatch = /type\s+Mutation\s*\{([^}]*)\}/s.exec(schema);
       if (mutationTypeMatch) {
         const mutationFields = mutationTypeMatch[1].matchAll(/\s*([A-Za-z_][\w-]*)\s*(?:\([^)]*\))?\s*:\s*/g);
@@ -720,64 +730,81 @@ export class DocumentValidator {
       }
     }
 
-    // Also check for query/mutation resolver definitions
-    const queryResolverRe = /query\s+([A-Za-z_][\w-]*)\s*=/g;
-    for (let m; (m = queryResolverRe.exec(text)); ) {
-      queries.add(m[1]);
-    }
+    // Validate test assertions using test.conditions (AST data)
+    for (const describe of program.describes) {
+      for (const test of describe.tests) {
+        for (const condition of test.conditions) {
+          // Validate call assertions
+          if (condition.isCallAssertion && condition.callTarget) {
+            // Parse the callTarget: "query users" or "mutation createUser"
+            const match = /^(query|mutation)\s+([A-Za-z_][\w-]*)/.exec(condition.callTarget);
+            if (match) {
+              const callType = match[1];
+              const callName = match[2];
+              const resolverSet = callType === 'query' ? queries : mutations;
 
-    const mutationResolverRe = /mutation\s+([A-Za-z_][\w-]*)\s*=/g;
-    for (let m; (m = mutationResolverRe.exec(text)); ) {
-      mutations.add(m[1]);
-    }
+              // Only validate if we have schema/resolver information
+              if (resolverSet.size > 0 && !resolverSet.has(callName)) {
+                // Find the position of the name in the callTarget
+                const nameOffset = condition.start + match[1].length + 1;
+                push(
+                  DiagnosticSeverity.Warning,
+                  nameOffset,
+                  nameOffset + callName.length,
+                  `Unknown GraphQL ${callType} in assertion: ${callName}`
+                );
+              }
+            }
+          }
 
-    // call query/mutation assertions (call query users with `...`)
-    const callAssertionRe = /(^|\n)\s*(then|and)\s+call\s+(query|mutation)\s+([A-Za-z_][\w-]*)\s+(with(?:\s+arguments)?)\s+`/g;
-    for (let m; (m = callAssertionRe.exec(text)); ) {
-      const callType = m[3]; // query or mutation
-      const callName = m[4];
-      const resolverSet = callType === 'query' ? queries : mutations;
+          // Validate status code assertions
+          if (condition.field === 'status' && condition.value) {
+            if (condition.comparison === 'is') {
+              const code = parseInt(condition.value, 10);
+              if (code < 100 || code > 599) {
+                push(
+                  DiagnosticSeverity.Error,
+                  condition.start,
+                  condition.end,
+                  `Invalid HTTP status code: ${code}`
+                );
+              }
+            } else if (condition.comparison === 'in') {
+              // Parse range: "200..299"
+              const rangeMatch = /(\d{3})\.\.(\d{3})/.exec(condition.value);
+              if (rangeMatch) {
+                const a = parseInt(rangeMatch[1], 10);
+                const b = parseInt(rangeMatch[2], 10);
+                if (a < 100 || a > 599) {
+                  push(
+                    DiagnosticSeverity.Error,
+                    condition.start,
+                    condition.end,
+                    `Invalid HTTP status code: ${a}`
+                  );
+                }
+                if (b < 100 || b > 599 || b < a) {
+                  push(
+                    DiagnosticSeverity.Error,
+                    condition.start,
+                    condition.end,
+                    `Invalid HTTP status range end: ${b}`
+                  );
+                }
+              }
+            }
+          }
 
-      // Only validate if we have schema/resolver information
-      if (resolverSet.size > 0 && !resolverSet.has(callName)) {
-        const nameStart = m.index + m[0].lastIndexOf(callName);
-        push(DiagnosticSeverity.Warning, nameStart, nameStart + callName.length, `Unknown GraphQL ${callType} in assertion: ${callName}`);
-      }
-    }
-
-    // status is NNN
-    const statusIsRe = /(^|\n)\s*(then|and)\s+status\s+is\s+(\d{3})\b/g;
-    for (let m; (m = statusIsRe.exec(text)); ) {
-      const code = parseInt(m[3], 10);
-      if (code < 100 || code > 599) {
-        const start = m.index + m[0].lastIndexOf(m[3]);
-        push(DiagnosticSeverity.Error, start, start + m[3].length, `Invalid HTTP status code: ${code}`);
-      }
-    }
-
-    // status in NNN..NNN
-    const statusInRe = /(^|\n)\s*(then|and)\s+status\s+in\s+(\d{3})\.\.(\d{3})\b/g;
-    for (let m; (m = statusInRe.exec(text)); ) {
-      const a = parseInt(m[3], 10);
-      const b = parseInt(m[4], 10);
-      if (a < 100 || a > 599) {
-        const start = m.index + m[0].indexOf(m[3]);
-        push(DiagnosticSeverity.Error, start, start + m[3].length, `Invalid HTTP status code: ${a}`);
-      }
-      if (b < 100 || b > 599 || b < a) {
-        const start = m.index + m[0].indexOf(m[4]);
-        push(DiagnosticSeverity.Error, start, start + m[4].length, `Invalid HTTP status range end: ${b}`);
-      }
-    }
-
-    // contentType assertions
-    const ctAny = /(^|\n)\s*(then|and)\s+contentType\b([^\n]*)/g;
-    for (let m; (m = ctAny.exec(text)); ) {
-      const lineStart = m.index + (m[1] ? m[1].length : 0);
-      const tail = m[3];
-      const head = `contentType${tail}`.trim();
-      if (!/^contentType\s+is\s+"[^"]+"$/.test(head)) {
-        push(DiagnosticSeverity.Error, lineStart + m[0].indexOf('contentType'), lineStart + m[0].length, 'Malformed contentType assertion. Expected: then|and contentType is "<type>"');
+          // Validate contentType assertions
+          if (condition.field === 'contentType' && condition.comparison !== 'is') {
+            push(
+              DiagnosticSeverity.Error,
+              condition.start,
+              condition.end,
+              'Malformed contentType assertion. Expected: then|and contentType is "<type>"'
+            );
+          }
+        }
       }
     }
   }
@@ -951,12 +978,8 @@ export class DocumentValidator {
 
     // Process each describe block
     for (const describe of program.describes) {
-      // Find the describe block in the text
-      const describeRe = new RegExp(`\\bdescribe\\s+"${escapeRegex(describe.name || '')}"`, 'g');
-      const describeMatch = describeRe.exec(text);
-      if (!describeMatch) continue;
-
-      const describeStart = describeMatch.index;
+      // Use AST position directly (NO REGEX!)
+      const describeStart = describe.start;
 
       // Collect describe-level variables for validating describe-level mocks
       const describeVariables = new Set<string>();
@@ -1016,13 +1039,8 @@ export class DocumentValidator {
       for (const test of describe.tests) {
         if (!test.name) continue;
 
-        // Find this specific test in the text after the describe block
-        const itRe = new RegExp(`\\bit\\s+"${escapeRegex(test.name)}"`, 'g');
-        itRe.lastIndex = describeStart;
-        const itMatch = itRe.exec(text);
-        if (!itMatch) continue;
-
-        const testStart = itMatch.index;
+        // Use AST position directly (NO REGEX!)
+        const testStart = test.start;
 
         // Track which variables are defined in this test
         // Start with describe-level variables

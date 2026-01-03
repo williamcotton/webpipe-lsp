@@ -1,31 +1,54 @@
 import { ReferencePositions, RangeAbs, HandlebarsSymbols } from './types';
 import { extractHandlebarsVariables, extractJqVariablesExcludingGraphQL } from './test-variable-utils';
 import { Program } from 'webpipe-js';
+import { walkPipelineSteps } from './ast-utils';
 
-function collectHandlebarsContentRanges(text: string): RangeAbs[] {
+/**
+ * Collects Handlebars content ranges using AST traversal
+ * Finds handlebars name = `...` variables and |> handlebars: `...` steps
+ */
+function collectHandlebarsContentRangesAST(program: Program, text: string): RangeAbs[] {
   const ranges: RangeAbs[] = [];
 
-  // Variable declarations: handlebars <name> = `...`
-  const varRe = /(^|\n)\s*handlebars\s+([A-Za-z_][\w-]*)\s*=\s*`([\s\S]*?)`/g;
-  for (let m; (m = varRe.exec(text)); ) {
-    const whole = m[0];
-    const content = m[3];
-    const backtickRel = whole.indexOf('`');
-    if (backtickRel >= 0) {
-      const contentStart = m.index + backtickRel + 1;
-      ranges.push({ start: contentStart, end: contentStart + content.length });
+  // 1. Variable declarations: handlebars <name> = `...`
+  for (const variable of program.variables) {
+    if (variable.varType === 'handlebars' || variable.varType === 'mustache') {
+      // Find the backtick content
+      // The AST gives us the full range. We need to find the backticks inside.
+      const slice = text.slice(variable.start, variable.end);
+      const backtickStart = slice.indexOf('`');
+      const backtickEnd = slice.lastIndexOf('`');
+
+      if (backtickStart !== -1 && backtickEnd !== -1 && backtickEnd > backtickStart) {
+        ranges.push({
+          start: variable.start + backtickStart + 1,
+          end: variable.start + backtickEnd
+        });
+      }
     }
   }
 
-  // Inline step content: |> handlebars: `...`
-  const stepRe = /(^|\n)\s*\|>\s*handlebars\s*:\s*`([\s\S]*?)`/g;
-  for (let m; (m = stepRe.exec(text)); ) {
-    const whole = m[0];
-    const content = m[2];
-    const backtickRel = whole.indexOf('`');
-    if (backtickRel >= 0) {
-      const contentStart = m.index + backtickRel + 1;
-      ranges.push({ start: contentStart, end: contentStart + content.length });
+  // 2. Inline step content: |> handlebars: `...`
+  for (const step of walkPipelineSteps(program)) {
+    if (step.kind === 'Regular' &&
+        (step.name === 'handlebars' || step.name === 'mustache') &&
+        step.configType === 'backtick') {
+
+      // step.config contains the content *inside* the backticks (usually)
+      // or we can find it in the source.
+      // Assuming step.start/end covers the whole step.
+      // We can use step.configStart if available, or search for backticks.
+
+      const slice = text.slice(step.start, step.end);
+      const backtickStart = slice.indexOf('`');
+      const backtickEnd = slice.lastIndexOf('`');
+
+      if (backtickStart !== -1 && backtickEnd !== -1 && backtickEnd > backtickStart) {
+        ranges.push({
+          start: step.start + backtickStart + 1,
+          end: step.start + backtickEnd
+        });
+      }
     }
   }
 
@@ -40,16 +63,18 @@ export function collectHandlebarsSymbols(text: string, program: Program): Handle
 
   // Use AST to find handlebars variable declarations
   for (const variable of program.variables) {
-    if (variable.varType === 'handlebars') {
+    if (variable.varType === 'handlebars' || variable.varType === 'mustache') {
       // Calculate the position of the variable name within the declaration
-      // Format: "handlebars <name> = `...`"
-      // The name starts after "handlebars "
-      const nameStart = variable.start + 'handlebars '.length;
-      declByName.set(variable.name, { nameStart, nameEnd: nameStart + variable.name.length });
+      const searchStart = variable.start + variable.varType.length; // skip "handlebars" or "mustache"
+      const nameIndex = text.indexOf(variable.name, searchStart);
+
+      if (nameIndex !== -1) {
+        declByName.set(variable.name, { nameStart: nameIndex, nameEnd: nameIndex + variable.name.length });
+      }
     }
   }
 
-  const contentRanges = collectHandlebarsContentRanges(text);
+  const contentRanges = collectHandlebarsContentRangesAST(program, text);
   const usagesByName = new Map<string, Array<{ start: number; end: number }>>();
   const inlineDefsByContent: Array<{
     range: RangeAbs;
