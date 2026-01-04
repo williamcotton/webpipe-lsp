@@ -97,7 +97,7 @@ export default function(hljs) {
       // Middleware functions in pipelines (word before colon, optionally with parens/brackets)
       {
         scope: 'keyword',
-        match: '\\b[a-zA-Z_][a-zA-Z0-9_]*(?=\\s*(?:\\([^)]*\\)|\\[[^\\]]*\\])?\\s*:)'
+        match: '\\b[a-zA-Z_][a-zA-Z0-9_]*(?=\\s*(?:\\((?:[^()]|\\((?:[^()]|\\([^()]*\\))*\\))*\\)|\\[[^\\]]*\\])?\\s*:)'
       },
 
       // Route paths
