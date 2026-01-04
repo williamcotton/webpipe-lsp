@@ -21,7 +21,7 @@ export default function(hljs) {
       // Config / pipeline / featureFlags keywords
       {
         scope: 'keyword',
-        match: '\\b(config|pipeline|featureFlags)\\b'
+        match: '\\b(config|pipeline|featureFlags|graphqlSchema|resolver)\\b'
       },
 
       // Control flow keywords (if/else/dispatch/foreach)
@@ -94,10 +94,10 @@ export default function(hljs) {
         match: '@!?[a-zA-Z_][a-zA-Z0-9_-]*'
       },
 
-      // Middleware functions in pipelines (word before colon)
+      // Middleware functions in pipelines (word before colon, optionally with parens/brackets)
       {
         scope: 'keyword',
-        match: '\\b[a-zA-Z_][a-zA-Z0-9_]*(?=\\s*:)'
+        match: '\\b[a-zA-Z_][a-zA-Z0-9_]*(?=\\s*(?:\\([^)]*\\)|\\[[^\\]]*\\])?\\s*:)'
       },
 
       // Route paths
