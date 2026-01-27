@@ -318,6 +318,10 @@ export class LanguageProviders {
     const graphqlHover = this.getGraphQLHoverAST(context, text, word, offset, doc);
     if (graphqlHover) return graphqlHover;
 
+    // Pipeline hover (mock/call assertion context)
+    const pipelineHover = this.getPipelineHoverAST(context, text, offset, doc);
+    if (pipelineHover) return pipelineHover;
+
     // Route calling hover (when calling METHOD /path)
     if (context.kind === 'route' && context.node) {
       const whenNode = context.node as any;
@@ -498,6 +502,10 @@ export class LanguageProviders {
     // GraphQL resolver definition (mock/call assertion context)
     const graphqlDef = this.getGraphQLDefinitionAST(context, word, symbols, doc, offset);
     if (graphqlDef) return graphqlDef;
+
+    // Pipeline definition (mock/call assertion context)
+    const pipelineDef = this.getPipelineDefinitionAST(context, symbols, doc, offset);
+    if (pipelineDef) return pipelineDef;
 
     // Test let variable definition (Handlebars {{var}})
     const testLetDefinition = this.getTestLetVariableDefinitionAST(text, offset, word, doc);
@@ -713,6 +721,91 @@ export class LanguageProviders {
   }
 
   /**
+   * AST-based pipeline hover for mocks and call assertions
+   * Handles "with mock pipeline <name>" and "and call pipeline <name>"
+   */
+  private getPipelineHoverAST(context: ReturnType<typeof this.getASTContext>, text: string, offset: number, doc: TextDocument): Hover | null {
+    // Check mock context for pipeline mocks
+    if (context.kind === 'mock' && context.node) {
+      const mockNode = context.node as any;
+      const target = mockNode.target || '';
+
+      // Check if it's a pipeline mock: "pipeline.<name>"
+      const match = /^pipeline\.([A-Za-z_][\w-]*)/.exec(target);
+
+      if (match) {
+        const pipelineName = match[1];
+
+        // Get the precise range of the pipeline name
+        const nameRange = this.getPipelineNameRange(text, mockNode.start, mockNode.end, pipelineName);
+
+        if (nameRange) {
+          // Check if cursor is within the name range
+          if (offset >= nameRange.start && offset <= nameRange.end) {
+            const md = this.formatPipelineHover(text, pipelineName, doc);
+            if (md) {
+              return { contents: { kind: MarkupKind.Markdown, value: md } };
+            }
+          }
+        }
+      }
+    }
+
+    // Check test context for pipeline call assertions
+    if (context.kind === 'test' && context.node) {
+      const testNode = context.node as any;
+      if (testNode.conditions) {
+        for (const cond of testNode.conditions) {
+          const isCallAssertion = cond.kind === 'CallAssertion' || cond.isCallAssertion;
+          const target = cond.target || cond.callTarget;
+
+          if (isCallAssertion && target) {
+            // Call assertions use dot notation: "pipeline.processItem"
+            const match = /^pipeline\.([A-Za-z_][\w-]*)/.exec(target);
+
+            if (match) {
+              const pipelineName = match[1];
+
+              // Get the precise range of the pipeline name
+              const nameRange = this.getPipelineNameRange(text, cond.start, cond.end, pipelineName);
+
+              if (nameRange) {
+                // Check if cursor is within the name range
+                if (offset >= nameRange.start && offset <= nameRange.end) {
+                  const md = this.formatPipelineHover(text, pipelineName, doc);
+                  if (md) {
+                    return { contents: { kind: MarkupKind.Markdown, value: md } };
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get the range of a pipeline name within mock or call assertion text
+   */
+  private getPipelineNameRange(text: string, blockStart: number, blockEnd: number, pipelineName: string): { start: number; end: number } | null {
+    const blockText = text.slice(blockStart, blockEnd);
+
+    // Look for "pipeline <name>" pattern (with space, as written in source)
+    const spacePattern = new RegExp(`pipeline\\s+(${pipelineName})\\b`);
+    const spaceMatch = spacePattern.exec(blockText);
+
+    if (spaceMatch) {
+      const nameStart = blockStart + spaceMatch.index + spaceMatch[0].length - pipelineName.length;
+      return { start: nameStart, end: nameStart + pipelineName.length };
+    }
+
+    return null;
+  }
+
+  /**
    * AST-based test let variable hover
    * Uses AST to detect if we're within a template string node rather than fragile lastIndexOf
    */
@@ -886,10 +979,28 @@ export class LanguageProviders {
       return true;
     }
 
-    // Check if we're in a mock that mocks a pipeline
+    // Check if we're in a mock that mocks a pipeline (dot notation: pipeline.name)
     if (context.kind === 'mock') {
       const mockNode = context.node as any;
-      if (mockNode.target && mockNode.target.startsWith('pipeline ')) return true;
+      if (mockNode.target && mockNode.target.startsWith('pipeline.')) return true;
+    }
+
+    // Check if we're in a call assertion that calls a pipeline
+    if (context.kind === 'test' && context.node) {
+      const testNode = context.node as any;
+      if (testNode.conditions) {
+        for (const cond of testNode.conditions) {
+          const isCallAssertion = cond.kind === 'CallAssertion' || cond.isCallAssertion;
+          const target = cond.target || cond.callTarget;
+          if (isCallAssertion && target && target.startsWith('pipeline.')) {
+            // Check if offset is within the pipeline name
+            if (cond.start !== undefined && cond.end !== undefined &&
+                offset >= cond.start && offset <= cond.end) {
+              return true;
+            }
+          }
+        }
+      }
     }
 
     // Check if we're in a test when clause that executes a pipeline
@@ -1308,6 +1419,86 @@ export class LanguageProviders {
                     : symbols.mutationPositions;
 
                   const hit = resolverMap.get(operationName);
+
+                  if (hit) {
+                    const range = {
+                      start: doc.positionAt(hit.start),
+                      end: doc.positionAt(hit.start + hit.length)
+                    };
+                    return Location.create(doc.uri, range);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get pipeline definition from mock or call assertion context
+   */
+  private getPipelineDefinitionAST(
+    context: ReturnType<typeof this.getASTContext>,
+    symbols: SymbolTable,
+    doc: TextDocument,
+    offset: number
+  ): Location | null {
+    const text = this.workspace.getText(doc);
+
+    // Handle mock context
+    if (context.kind === 'mock' && context.node) {
+      const mockNode = context.node as any;
+      const target = mockNode.target || '';
+
+      const match = /^pipeline\.([A-Za-z_][\w-]*)/.exec(target);
+
+      if (match) {
+        const pipelineName = match[1];
+
+        // Get the precise range of the pipeline name
+        const nameRange = this.getPipelineNameRange(text, mockNode.start, mockNode.end, pipelineName);
+
+        if (nameRange) {
+          // Check if cursor is within the name range
+          if (offset >= nameRange.start && offset <= nameRange.end) {
+            const hit = symbols.pipelinePositions.get(pipelineName);
+
+            if (hit) {
+              const range = {
+                start: doc.positionAt(hit.start),
+                end: doc.positionAt(hit.start + hit.length)
+              };
+              return Location.create(doc.uri, range);
+            }
+          }
+        }
+      }
+    }
+
+    // Handle test call assertion context
+    if (context.kind === 'test' && context.node) {
+      const testNode = context.node as any;
+      if (testNode.conditions) {
+        for (const cond of testNode.conditions) {
+          if (cond.isCallAssertion && cond.callTarget) {
+            const target = cond.callTarget;
+
+            const match = /^pipeline\.([A-Za-z_][\w-]*)/.exec(target);
+
+            if (match) {
+              const pipelineName = match[1];
+
+              // Get the precise range of the pipeline name
+              const nameRange = this.getPipelineNameRange(text, testNode.start, testNode.end, pipelineName);
+
+              if (nameRange) {
+                // Check if cursor is within the name range
+                if (offset >= nameRange.start && offset <= nameRange.end) {
+                  const hit = symbols.pipelinePositions.get(pipelineName);
 
                   if (hit) {
                     const range = {

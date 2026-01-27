@@ -1291,7 +1291,7 @@
         },
         {
           "name": "keyword.control.bdd.helper.webpipe",
-          "match": "\\b(executing|calling|input|output|contentType|equals|contains|matches|in|status|mock|returning|call|query|mutation|selector|exists|attribute|text|count)\\b"
+          "match": "\\b(executing|calling|input|output|contentType|equals|contains|matches|in|status|mock|returning|call|query|mutation|pipeline|selector|exists|attribute|text|count)\\b"
         }
       ]
     },
@@ -1366,7 +1366,7 @@
     "assertion-call-jq": {
       "patterns": [
         {
-          "begin": "^\\s*(then|and)\\s+(call)\\s+(query|mutation)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s+(with)\\s*`",
+          "begin": "^\\s*(then|and)\\s+(call)\\s+(query|mutation|pipeline)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s+(with)\\s*`",
           "beginCaptures": {
             "1": { "name": "keyword.control.bdd.webpipe" },
             "2": { "name": "keyword.control.bdd.helper.webpipe" },
@@ -1400,7 +1400,7 @@
           ]
         },
         {
-          "begin": "^\\s*(with|and)(?:\\s+(with))?\\s+(mock)\\s+(query|mutation)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s+(returning)\\s*`",
+          "begin": "^\\s*(with|and)(?:\\s+(with))?\\s+(mock)\\s+(query|mutation|pipeline)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s+(returning)\\s*`",
           "beginCaptures": {
             "1": { "name": "keyword.control.bdd.webpipe" },
             "2": { "name": "keyword.control.bdd.webpipe" },

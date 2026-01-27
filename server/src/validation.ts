@@ -619,6 +619,31 @@ export class DocumentValidator {
 
       const nameStart = mock.targetStart + dotIndex + 1;
 
+      // Handle pipeline mocks in dot notation (pipeline.name)
+      if (varType === 'pipeline') {
+        if (this.symbolResolver.isScoped(varName)) {
+          const resolved = this.symbolResolver.resolveReference(
+            doc.uri,
+            varName,
+            (uri) => this.workspace.getDocument(uri)
+          );
+
+          if (!resolved) {
+            const alias = this.symbolResolver.getAlias(varName);
+            const symbolName = this.symbolResolver.getSymbolName(varName);
+            const metadata = this.workspace.getDocument(doc.uri);
+            const hasImport = metadata?.imports?.some(i => i.alias === alias);
+            const msg = hasImport
+              ? `Pipeline '${symbolName}' not found in module '${alias}'`
+              : `Unknown import alias '${alias}'`;
+            push(DiagnosticSeverity.Error, nameStart, mock.targetStart + target.length, msg);
+          }
+        } else if (!pipelineNames.has(varName)) {
+          push(DiagnosticSeverity.Error, nameStart, mock.targetStart + target.length, `Unknown pipeline in mock: ${varName}`);
+        }
+        return;
+      }
+
       if (this.symbolResolver.isScoped(varName)) {
         const resolved = this.symbolResolver.resolveVariableReference(
           doc.uri,
