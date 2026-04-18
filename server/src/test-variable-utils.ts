@@ -43,22 +43,53 @@ export function extractHandlebarsVariables(
 
 /**
  * Helper to extract JQ variable references from a string
- * Matches $variableName in JQ expressions
+ * Matches $variableName in JQ expressions while ignoring quoted string literals
  */
 export function extractJqVariables(
   str: string,
   baseOffset: number
 ): Array<{ name: string; start: number; end: number }> {
-  const regex = /\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
   const variables: Array<{ name: string; start: number; end: number }> = [];
-  let match;
+  let inString = false;
+  let escapeNext = false;
 
-  while ((match = regex.exec(str)) !== null) {
+  for (let index = 0; index < str.length; index++) {
+    const ch = str[index];
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (inString) {
+      if (ch === '\\') {
+        escapeNext = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (ch !== '$' || !/[a-zA-Z_]/.test(str[index + 1] ?? '')) {
+      continue;
+    }
+
+    let end = index + 2;
+    while (end < str.length && /[a-zA-Z0-9_]/.test(str[end])) {
+      end++;
+    }
+
     variables.push({
-      name: match[1],
-      start: baseOffset + match.index,
-      end: baseOffset + match.index + match[0].length
+      name: str.slice(index + 1, end),
+      start: baseOffset + index,
+      end: baseOffset + end
     });
+    index = end - 1;
   }
 
   return variables;
@@ -206,7 +237,8 @@ export function findTestBlockRange(
 
 /**
  * Extract JQ variables from text, excluding GraphQL contexts
- * GraphQL contexts are identified by `graphql:` backtick blocks
+ * GraphQL contexts are identified by `graphql:` backtick blocks.
+ * Quoted strings within JQ snippets are ignored by extractJqVariables.
  */
 export function extractJqVariablesExcludingGraphQL(
   str: string,
