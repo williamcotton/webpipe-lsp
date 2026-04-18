@@ -30,7 +30,8 @@
     "compile:server": "tsc -b server",
     "watch": "tsc -b -w client server",
     "postinstall": "node ./client/postinstall.js || true",
-    "vscode:prepublish": "npm run compile"
+    "vscode:prepublish": "npm run compile",
+    "package": "npx @vscode/vsce package"
   },
   "contributes": {
     "languages": [
