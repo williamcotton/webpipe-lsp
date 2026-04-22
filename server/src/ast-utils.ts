@@ -27,6 +27,7 @@ import type {
   ResultBranch,
   Tag,
 } from 'webpipe-js';
+import { KNOWN_MIDDLEWARE, KNOWN_STEPS } from './constants';
 
 /**
  * Union type representing any AST node that has source location information
@@ -86,7 +87,8 @@ export function findNodeAtOffset(program: Program, offset: number): ASTNode | nu
     // Check if this node has source location and contains the offset
     if (hasSourceLocation(node) && containsOffset(node, offset)) {
       const range = node.end - node.start;
-      if (range < smallestRange) {
+      // Prefer the deeper child when parent and child share the same span.
+      if (range <= smallestRange) {
         smallestRange = range;
         mostSpecific = node as ASTNode;
       }
@@ -270,11 +272,12 @@ export function* walkPipelineSteps(program: Program): Generator<PipelineStep> {
  */
 export function* walkVariableReferences(program: Program): Generator<{ step: PipelineStep; varName: string; offset: number }> {
   for (const step of walkPipelineSteps(program)) {
-    if (step.kind === 'Regular' && step.configType === 'identifier') {
+    const variableRef = getVariableReferenceFromStep(step);
+    if (variableRef) {
       yield {
         step,
-        varName: step.config,
-        offset: step.start,
+        varName: variableRef.varName,
+        offset: variableRef.offset,
       };
     }
   }
@@ -296,12 +299,11 @@ export function* walkPipelineReferences(program: Program): Generator<{ name: str
 
   // Pipeline steps that reference other pipelines (|> pipeline: Name or |> loader(...): Name)
   for (const step of walkPipelineSteps(program)) {
-    if (step.kind === 'Regular' &&
-        (step.name === 'pipeline' || step.name === 'loader') &&
-        step.configType === 'identifier') {
+    const pipelineRef = getPipelineReferenceFromStep(step);
+    if (pipelineRef) {
       yield {
-        name: step.config,
-        offset: step.start,
+        name: pipelineRef.name,
+        offset: pipelineRef.offset,
       };
     }
   }
@@ -332,4 +334,60 @@ export function* walkPipelineReferences(program: Program): Generator<{ name: str
       }
     }
   }
+}
+
+export function regularStepHasConfig(step: PipelineStep): boolean {
+  if (step.kind !== 'Regular') return false;
+  const stepAny = step as any;
+  if (typeof stepAny.hasConfig === 'boolean') {
+    return stepAny.hasConfig;
+  }
+  return step.configStart !== undefined || step.configEnd !== undefined || step.config !== '';
+}
+
+export function isImplicitPipelineCallStep(step: PipelineStep): boolean {
+  return step.kind === 'Regular' &&
+    !regularStepHasConfig(step) &&
+    !KNOWN_STEPS.has(step.name) &&
+    !KNOWN_MIDDLEWARE.has(step.name);
+}
+
+export function getPipelineReferenceFromStep(
+  step: PipelineStep
+): { name: string; offset: number; length: number; shorthand: boolean } | null {
+  if (step.kind !== 'Regular') return null;
+
+  if ((step.name === 'pipeline' || step.name === 'loader') && step.configType === 'identifier') {
+    return {
+      name: step.config,
+      offset: step.configStart ?? step.start,
+      length: step.config.length,
+      shorthand: false,
+    };
+  }
+
+  if (isImplicitPipelineCallStep(step)) {
+    return {
+      name: step.name,
+      offset: step.nameStart ?? step.start,
+      length: step.name.length,
+      shorthand: true,
+    };
+  }
+
+  return null;
+}
+
+export function getVariableReferenceFromStep(
+  step: PipelineStep
+): { varType: string; varName: string; offset: number; length: number } | null {
+  if (step.kind !== 'Regular' || step.configType !== 'identifier') return null;
+  if (getPipelineReferenceFromStep(step)) return null;
+
+  return {
+    varType: step.name,
+    varName: step.config,
+    offset: step.configStart ?? step.start,
+    length: step.config.length,
+  };
 }

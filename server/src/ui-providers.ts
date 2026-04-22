@@ -7,7 +7,7 @@ import {
 import { getWordAt } from './utils';
 import { WorkspaceManager } from './workspace-manager';
 import { filterReferencesInScope } from './symbol-collector';
-import { findNodeAtOffset } from './ast-utils';
+import { findNodeAtOffset, getPipelineReferenceFromStep, getVariableReferenceFromStep } from './ast-utils';
 
 export class UIProviders {
   constructor(private cache: WorkspaceManager) {}
@@ -92,6 +92,7 @@ export class UIProviders {
 
   onDocumentHighlight(params: DocumentHighlightParams, doc: TextDocument): DocumentHighlight[] | null {
     const text = this.cache.getText(doc);
+    const program = this.cache.getProgram(doc);
     const symbols = this.cache.getSymbols(doc);
     const pos = params.position;
     const offset = doc.offsetAt(pos);
@@ -103,6 +104,7 @@ export class UIProviders {
     const nextNl = text.indexOf('\n', offset);
     const lineEnd = nextNl === -1 ? text.length : nextNl;
     const lineText = text.slice(lineStart, lineEnd);
+    const astNode = findNodeAtOffset(program, offset) as any;
 
     const highlights: DocumentHighlight[] = [];
     const addRanges = (decl: { start: number; length: number } | undefined, refs: Array<{ start: number; length: number }>) => {
@@ -121,7 +123,7 @@ export class UIProviders {
     };
 
     // Pipeline highlights
-    if (this.isPipelineContext(lineText)) {
+    if (this.isPipelineContext(lineText, astNode)) {
       const decl = symbols.pipelinePositions.get(word);
       const refs = symbols.pipelineRefs.get(word) || [];
       addRanges(decl, refs);
@@ -129,7 +131,7 @@ export class UIProviders {
     }
 
     // Variable highlights
-    const variableKey = this.getVariableKey(lineText, word);
+    const variableKey = this.getVariableKey(lineText, word, astNode);
     if (variableKey) {
       const declsByName = symbols.variablePositions.get(variableKey.varType);
       const decl = declsByName?.get(variableKey.varName);
@@ -142,15 +144,29 @@ export class UIProviders {
     return null;
   }
 
-  private isPipelineContext(lineText: string): boolean {
+  private isPipelineContext(lineText: string, node?: any): boolean {
+    if (node?.kind === 'Regular' && getPipelineReferenceFromStep(node)) {
+      return true;
+    }
+
     return /^\s*\|>\s*pipeline\s*:/.test(lineText) ||
            /^\s*when\s+executing\s+pipeline\s+/.test(lineText) ||
            /^\s*(with|and)\s+mock\s+pipeline\s+/.test(lineText) ||
            /^\s*pipeline\s+[A-Za-z_][\w-]*\s*=/.test(lineText);
   }
 
-  private getVariableKey(lineText: string, word: string): { varType: string; varName: string } | null {
+  private getVariableKey(lineText: string, word: string, node?: any): { varType: string; varName: string } | null {
     let m: RegExpExecArray | null;
+
+    if (node?.kind === 'Regular') {
+      const variableRef = getVariableReferenceFromStep(node);
+      if (variableRef && word === variableRef.varName) {
+        return { varType: variableRef.varType, varName: variableRef.varName };
+      }
+      if (getPipelineReferenceFromStep(node)) {
+        return null;
+      }
+    }
 
     if ((m = /^\s*([A-Za-z_][\w-]*)\s+([A-Za-z_][\w-]*)\s*=\s*`/.exec(lineText))) {
       const varType = m[1];

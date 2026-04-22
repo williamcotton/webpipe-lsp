@@ -32,7 +32,7 @@ export class CompletionProvider {
     if (variableCompletion) return variableCompletion;
 
     // Middleware step name completion
-    const middlewareCompletion = this.getMiddlewareCompletion(linePrefix, doc, startOfLine, offset);
+    const middlewareCompletion = this.getMiddlewareCompletion(linePrefix, pipelineNames, doc, startOfLine, offset);
     if (middlewareCompletion) return middlewareCompletion;
 
     // Config block name completion
@@ -125,6 +125,7 @@ export class CompletionProvider {
 
   private getMiddlewareCompletion(
     linePrefix: string,
+    pipelineNames: Set<string>,
     doc: TextDocument,
     startOfLine: number,
     offset: number
@@ -138,11 +139,22 @@ export class CompletionProvider {
     const endAbs = offset;
     const range = { start: doc.positionAt(startAbs), end: doc.positionAt(endAbs) };
 
-    return Array.from(KNOWN_STEPS).map<CompletionItem>(name => ({
+    const items = Array.from(KNOWN_STEPS).map<CompletionItem>(name => ({
       label: name,
       kind: CompletionItemKind.Keyword,
       textEdit: { range, newText: name + ': ' }
     }));
+
+    for (const name of pipelineNames) {
+      if (KNOWN_STEPS.has(name) || KNOWN_MIDDLEWARE.has(name)) continue;
+      items.push({
+        label: name,
+        kind: CompletionItemKind.Function,
+        textEdit: { range, newText: name }
+      });
+    }
+
+    return items;
   }
 
   private getConfigNameCompletion(

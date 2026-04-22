@@ -6,7 +6,7 @@ import { WorkspaceManager } from './workspace-manager';
 import { SymbolResolver } from './symbol-resolver';
 import { Describe, Variable, NamedPipeline, PipelineStep, Program } from 'webpipe-js';
 import { findTestContextAtOffset, extractHandlebarsVariables, extractJqVariables, escapeRegex } from './test-variable-utils';
-import { walkPipelineSteps } from './ast-utils';
+import { getPipelineReferenceFromStep, walkPipelineSteps } from './ast-utils';
 
 interface DiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
@@ -300,35 +300,32 @@ export class DocumentValidator {
       // Handle Regular steps
       if (step.kind === 'Regular') {
         const stepName = step.name;
+        const pipelineRef = getPipelineReferenceFromStep(step);
 
         // Validate pipeline references (|> pipeline: Name or |> loader(...): Name)
-        if (stepName === 'pipeline' || stepName === 'loader') {
-          if (step.configType === 'identifier') {
-            const name = step.config;
-            const configStart = step.configStart ?? step.start;
+        if (pipelineRef) {
+          const name = pipelineRef.name;
+          const refStart = pipelineRef.offset;
 
-            // Handle scoped references (cross-file)
-            if (this.symbolResolver.isScoped(name)) {
-              const resolved = this.symbolResolver.resolveReference(
-                doc.uri,
-                name,
-                (uri) => this.workspace.getDocument(uri)
-              );
+          if (!pipelineRef.shorthand && this.symbolResolver.isScoped(name)) {
+            const resolved = this.symbolResolver.resolveReference(
+              doc.uri,
+              name,
+              (uri) => this.workspace.getDocument(uri)
+            );
 
-              if (!resolved) {
-                const alias = this.symbolResolver.getAlias(name);
-                const symbolName = this.symbolResolver.getSymbolName(name);
-                const metadata = this.workspace.getDocument(doc.uri);
-                const hasImport = metadata?.imports?.some(i => i.alias === alias);
-                const msg = hasImport
-                  ? `Pipeline '${symbolName}' not found in module '${alias}'`
-                  : `Unknown import alias '${alias}'`;
-                push(DiagnosticSeverity.Error, configStart, configStart + name.length, msg);
-              }
-            } else if (!pipelineNames.has(name)) {
-              // Local reference - validate as before
-              push(DiagnosticSeverity.Error, configStart, configStart + name.length, `Unknown pipeline: ${name}`);
+            if (!resolved) {
+              const alias = this.symbolResolver.getAlias(name);
+              const symbolName = this.symbolResolver.getSymbolName(name);
+              const metadata = this.workspace.getDocument(doc.uri);
+              const hasImport = metadata?.imports?.some(i => i.alias === alias);
+              const msg = hasImport
+                ? `Pipeline '${symbolName}' not found in module '${alias}'`
+                : `Unknown import alias '${alias}'`;
+              push(DiagnosticSeverity.Error, refStart, refStart + name.length, msg);
             }
+          } else if (!pipelineNames.has(name)) {
+            push(DiagnosticSeverity.Error, refStart, refStart + name.length, `Unknown pipeline: ${name}`);
           }
           continue;
         }

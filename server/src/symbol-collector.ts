@@ -1,7 +1,7 @@
 import { ReferencePositions, RangeAbs, HandlebarsSymbols } from './types';
 import { extractHandlebarsVariables, extractJqVariablesExcludingGraphQL } from './test-variable-utils';
 import { Program } from 'webpipe-js';
-import { walkPipelineSteps } from './ast-utils';
+import { getPipelineReferenceFromStep, getVariableReferenceFromStep, walkPipelineSteps } from './ast-utils';
 
 /**
  * Collects Handlebars content ranges using AST traversal
@@ -325,21 +325,15 @@ export function collectReferencesFromAST(program: Program): ReferencePositions {
   // Collect variable and pipeline references from pipeline steps
   const processPipeline = (pipeline: any) => {
     for (const step of walkPipeline(pipeline)) {
-      if (step.kind === 'Regular' && step.configType === 'identifier') {
-        const varName = step.config;
-        const stepName = step.name;
+      const pipelineRef = getPipelineReferenceFromStep(step);
+      if (pipelineRef) {
+        pushPipe(pipelineRef.name, pipelineRef.offset, pipelineRef.length);
+        continue;
+      }
 
-        // Use the exact position from the AST if available, otherwise fall back to step.start
-        const configPos = step.configStart ?? step.start;
-
-        // Pipeline references: |> pipeline: Name or |> loader(...): Name
-        // The step.name is just the identifier (e.g., "loader"), args are separate
-        if (stepName === 'pipeline' || stepName === 'loader') {
-          pushPipe(varName, configPos, varName.length);
-        } else {
-          // Variable references for other middleware
-          pushVar(stepName, varName, configPos, varName.length);
-        }
+      const variableRef = getVariableReferenceFromStep(step);
+      if (variableRef) {
+        pushVar(variableRef.varType, variableRef.varName, variableRef.offset, variableRef.length);
       }
     }
   };

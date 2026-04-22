@@ -11,7 +11,7 @@ import { getConfigDoc, formatConfigHover } from './config-docs';
 import { WorkspaceManager } from './workspace-manager';
 import { SymbolResolver } from './symbol-resolver';
 import { findTestContextAtOffset, findDescribeBlockRange, getLetVariableValue } from './test-variable-utils';
-import { findNodeAtOffset, ASTNode } from './ast-utils';
+import { findNodeAtOffset, ASTNode, isImplicitPipelineCallStep } from './ast-utils';
 
 /**
  * Language providers for hover, definition, and references.
@@ -86,7 +86,11 @@ export class LanguageProviders {
         }
       }
 
-      return { node, kind: 'step', varType: step.name };
+      return {
+        node,
+        kind: 'step',
+        varType: isImplicitPipelineCallStep(step) ? 'pipeline' : step.name,
+      };
     }
     if ('when' in node && 'conditions' in node) {
       return { node, kind: 'test' };
