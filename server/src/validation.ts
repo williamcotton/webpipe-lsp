@@ -1,5 +1,5 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { Diagnostic, DiagnosticSeverity, Connection } from 'vscode-languageserver/node';
+import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 import { VALID_HTTP_METHODS, KNOWN_MIDDLEWARE, KNOWN_STEPS } from './constants';
 import { collectHandlebarsSymbols } from './symbol-collector';
 import { WorkspaceManager } from './workspace-manager';
@@ -12,21 +12,31 @@ interface DiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
 }
 
+interface DiagnosticSink {
+  sendDiagnostics(payload: { uri: string; diagnostics: Diagnostic[] }): void;
+}
+
 export class DocumentValidator {
   private symbolResolver: SymbolResolver;
 
-  constructor(private connection: Connection, private workspace: WorkspaceManager) {
+  constructor(private workspace: WorkspaceManager, private sink?: DiagnosticSink) {
     this.symbolResolver = new SymbolResolver();
   }
 
-  async validateDocument(doc: TextDocument): Promise<void> {
+  collectDiagnostics(doc: TextDocument): Diagnostic[] {
     const text = this.workspace.getText(doc);
     const diagnostics: Diagnostic[] = [];
 
     this.validateTrailingNewline(text, doc, diagnostics);
     this.validateReferences(text, doc, diagnostics);
 
-    this.connection.sendDiagnostics({ uri: doc.uri, diagnostics });
+    return diagnostics;
+  }
+
+  async validateDocument(doc: TextDocument): Promise<Diagnostic[]> {
+    const diagnostics = this.collectDiagnostics(doc);
+    this.sink?.sendDiagnostics({ uri: doc.uri, diagnostics });
+    return diagnostics;
   }
 
   private validateTrailingNewline(text: string, doc: TextDocument, diagnostics: Diagnostic[]): void {

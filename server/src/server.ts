@@ -32,10 +32,10 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   const workspaceRoot = params.workspaceFolders?.[0]?.uri || '';
 
   // Initialize workspace manager with multi-file support
-  workspaceManager = new WorkspaceManager(connection, documents, workspaceRoot);
+  workspaceManager = new WorkspaceManager(connection.console, documents, workspaceRoot);
 
   // Initialize providers with workspace manager
-  documentValidator = new DocumentValidator(connection, workspaceManager);
+  documentValidator = new DocumentValidator(workspaceManager, connection);
   completionProvider = new CompletionProvider(workspaceManager);
   languageProviders = new LanguageProviders(workspaceManager, connection);
   uiProviders = new UIProviders(workspaceManager);

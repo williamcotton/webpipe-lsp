@@ -1,12 +1,19 @@
-import { TextDocument, TextDocuments } from 'vscode-languageserver';
 import { TextDocument as VTextDocument } from 'vscode-languageserver-textdocument';
-import { Connection } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 import * as fs from 'fs';
 import { parseProgramWithDiagnostics, Program, ParseDiagnostic } from 'webpipe-js';
 import { FileMetadata, ExportedSymbols, ResolvedImport, ImportGraphMetrics, SymbolTable } from './types';
 import { buildSymbolTable } from './symbol-analyzer';
 import { ImportResolver } from './import-resolver';
+
+export interface LoggerLike {
+  log(message: string): void;
+  error(message: string): void;
+}
+
+export interface DocumentLookup {
+  get(uri: string): VTextDocument | undefined;
+}
 
 /**
  * WorkspaceManager handles multi-file caching, dependency tracking, and cross-file symbol resolution
@@ -22,8 +29,8 @@ export class WorkspaceManager {
   private validationCallback?: (uri: string) => Promise<void>;
 
   constructor(
-    private connection: Connection,
-    private documents: TextDocuments<VTextDocument>,
+    private logger: LoggerLike,
+    private documents: DocumentLookup,
     private workspaceRoot: string
   ) {
     this.importResolver = new ImportResolver();
@@ -41,7 +48,7 @@ export class WorkspaceManager {
    * File watching is handled by the language server protocol
    */
   async initialize(): Promise<void> {
-    this.connection.console.log('WorkspaceManager initialized with file watching enabled');
+    this.logger.log('WorkspaceManager initialized with file watching enabled');
   }
 
   /**
@@ -509,9 +516,9 @@ export class WorkspaceManager {
       const version = stats.mtimeMs; // Use mtime as version
 
       this.parseAndCache(uri, text, version, false);
-      this.connection.console.log(`Reloaded file from disk: ${uri}`);
+      this.logger.log(`Reloaded file from disk: ${uri}`);
     } catch (error) {
-      this.connection.console.error(`Failed to reload file ${uri}: ${error}`);
+      this.logger.error(`Failed to reload file ${uri}: ${error}`);
     }
   }
 
@@ -527,7 +534,7 @@ export class WorkspaceManager {
 
     // Re-validate all dependent files
     for (const dependentUri of meta.dependents) {
-      this.connection.console.log(`Re-validating dependent: ${dependentUri}`);
+      this.logger.log(`Re-validating dependent: ${dependentUri}`);
 
       const dependentDoc = this.documents.get(dependentUri);
       if (dependentDoc) {
@@ -546,7 +553,7 @@ export class WorkspaceManager {
    * Handle file changed event from file system watcher
    */
   async handleFileChanged(uri: string): Promise<void> {
-    this.connection.console.log(`File changed: ${uri}`);
+    this.logger.log(`File changed: ${uri}`);
 
     // Reload the file from disk
     await this.reloadFromFileSystem(uri);
@@ -559,7 +566,7 @@ export class WorkspaceManager {
    * Handle file deletion
    */
   async handleFileDeleted(uri: string): Promise<void> {
-    this.connection.console.log(`File deleted: ${uri}`);
+    this.logger.log(`File deleted: ${uri}`);
 
     const meta = this.cache.get(uri);
 
@@ -569,7 +576,7 @@ export class WorkspaceManager {
     // Re-validate dependent files to show import errors
     if (meta) {
       for (const dependentUri of meta.dependents) {
-        this.connection.console.log(`Re-validating dependent after deletion: ${dependentUri}`);
+        this.logger.log(`Re-validating dependent after deletion: ${dependentUri}`);
 
         const dependentDoc = this.documents.get(dependentUri);
         if (dependentDoc) {

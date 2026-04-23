@@ -1,8 +1,8 @@
 {
-  "name": "webpipe",
+  "name": "webpip-lsp",
   "displayName": "Web Pipe",
   "description": "Web Pipe",
-  "version": "2.0.71",
+  "version": "2.0.72",
   "publisher": "williamcotton",
   "author": {
     "name": "William Cotton",
@@ -21,6 +21,16 @@
     "Debuggers"
   ],
   "main": "./client/out/extension.js",
+  "bin": {
+    "webpipe-lsp": "./server/out/cli.js"
+  },
+  "files": [
+    "README.md",
+    "language-configuration.json",
+    "syntaxes/**/*",
+    "client/out/**/*",
+    "server/out/**/*"
+  ],
   "activationEvents": [
     "onDebug"
   ],
@@ -28,8 +38,10 @@
     "compile": "npm run compile:client && npm run compile:server",
     "compile:client": "tsc -b client",
     "compile:server": "tsc -b server",
+    "check": "node ./server/out/cli.js check",
     "watch": "tsc -b -w client server",
     "postinstall": "node ./client/postinstall.js || true",
+    "prepack": "npm run compile",
     "vscode:prepublish": "npm run compile",
     "package": "npx @vscode/vsce package"
   },

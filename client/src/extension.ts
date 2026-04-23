@@ -11,6 +11,10 @@ import {
 let client: LanguageClient | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
+  if (client) {
+    return;
+  }
+
   const serverModule = context.asAbsolutePath(path.join('server', 'out', 'server.js'));
 
   const serverOptions: ServerOptions = {
@@ -294,4 +298,3 @@ class WebPipeDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescrip
     return null;
   }
 }
-

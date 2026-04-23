@@ -7,6 +7,7 @@ This extension provides:
 - syntax highlighting for `.wp` files
 - diagnostics, hovers, completions, and other language-server features
 - a `webpipe` debug configuration for VS Code
+- a `webpipe-lsp` CLI for terminal diagnostics
 
 ## Install `webpipe`
 
@@ -18,6 +19,33 @@ The simplest install path is Homebrew:
 brew tap williamcotton/webpipe
 brew install webpipe
 ```
+
+## CLI Diagnostics
+
+This package also ships a terminal diagnostics command:
+
+```bash
+webpipe-lsp check app.wp
+webpipe-lsp check app.wp --json
+```
+
+For local development from this repo:
+
+```bash
+npm ci
+npm run compile
+npm run check -- ../webpipe/example.wp
+```
+
+If you want the `webpipe-lsp` command available in your shell from a local clone:
+
+```bash
+npm ci
+npm run compile
+npm link
+```
+
+If this package is published to npm, users can install it globally and get the same `webpipe-lsp` command from their `PATH`.
 
 ## Build And Ship A VSIX
 
