@@ -116,7 +116,7 @@ export const middlewareDocs: Record<string, MiddlewareDoc> = {
       'Can reference named contracts declared with `assert Name = `...``'
     ],
     errors: [
-      '`{ type: "validationError", field, message, rule: "assert" }`'
+      '`{ type: "assertionError", field, message, rule: "assert", code: "assert_failed" }`'
     ],
     examples: [
       'assert TeamsPageState = `{\n  data: {\n    rows: [{ id: string, name: string }],\n    rowCount: number\n  }\n}`\n\nGET /teams\n  |> pg: `SELECT * FROM teams`\n  |> assert: TeamsPageState\n  |> jq: `{ names: .data.rows | map(.name) }`',
