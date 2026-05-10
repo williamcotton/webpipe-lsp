@@ -27,6 +27,19 @@ This package also ships a terminal diagnostics command:
 ```bash
 webpipe-lsp check app.wp
 webpipe-lsp check app.wp --json
+webpipe-lsp check app.wp --strict-types
+webpipe-lsp check app.wp --typecheck=strict
+```
+
+Strict mode requires opaque pipeline outputs from `pg`, `fetch`, `graphql`,
+`lua`, `js`, raw `pg !raw`, async joins, named pipelines, and request bodies to be
+refined with `assert` or `validate` before they are consumed or returned. You can
+also enable it in a `.wp` file:
+
+```wp
+config typecheck {
+  strict: true
+}
 ```
 
 For local development from this repo:

@@ -4,6 +4,11 @@ export const KNOWN_MIDDLEWARE = new Set([
   'jq', 'pg', 'fetch', 'handlebars', 'lua', 'js', 'auth', 'cache', 'log', 'debug', 'validate', 'assert', 'graphql', 'rateLimit', 'gg'
 ]);
 
+export const KNOWN_CONFIGS = new Set([
+  ...KNOWN_MIDDLEWARE,
+  'typecheck'
+]);
+
 export const KNOWN_STEPS = new Set([
   'jq', 'pg', 'fetch', 'handlebars', 'lua', 'js', 'auth', 'cache', 'log', 'debug', 'validate', 'assert', 'result', 'pipeline', 'join', 'graphql', 'rateLimit', 'loader', 'gg'
 ]);

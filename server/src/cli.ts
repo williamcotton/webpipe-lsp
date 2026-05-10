@@ -7,12 +7,14 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
 import { DocumentValidator } from './validation';
 import { DocumentLookup, LoggerLike, WorkspaceManager } from './workspace-manager';
+import type { TypeCheckMode } from './type-checker';
 
 interface CliOptions {
   command: 'check';
   filePath: string;
   json: boolean;
   workspaceRoot: string;
+  typeCheckMode?: TypeCheckMode;
 }
 
 class StaticDocumentStore implements DocumentLookup {
@@ -40,6 +42,8 @@ function usage(): string {
     '',
     'Options:',
     '  --json                 Print machine-readable diagnostics JSON',
+    '  --strict-types         Enable strict pipeline type checking',
+    '  --typecheck MODE       Type checking mode: loose or strict',
     '  --workspace-root DIR   Override workspace root (defaults to cwd)',
     '  -h, --help             Show this help',
   ].join('\n');
@@ -55,6 +59,7 @@ function parseArgs(argv: string[]): CliOptions {
   let filePath: string | undefined;
   let json = false;
   let workspaceRoot = process.cwd();
+  let typeCheckMode: TypeCheckMode | undefined;
 
   let index = 0;
   if (argv[0] === 'check') {
@@ -80,6 +85,28 @@ function parseArgs(argv: string[]): CliOptions {
       continue;
     }
 
+    if (arg === '--strict-types') {
+      typeCheckMode = 'strict';
+      index += 1;
+      continue;
+    }
+
+    if (arg === '--typecheck') {
+      const value = argv[index + 1];
+      if (!value) {
+        throw new Error('Missing value for --typecheck');
+      }
+      typeCheckMode = parseTypeCheckMode(value);
+      index += 2;
+      continue;
+    }
+
+    if (arg.startsWith('--typecheck=')) {
+      typeCheckMode = parseTypeCheckMode(arg.slice('--typecheck='.length));
+      index += 1;
+      continue;
+    }
+
     if (arg.startsWith('-')) {
       throw new Error(`Unknown option: ${arg}`);
     }
@@ -101,8 +128,16 @@ function parseArgs(argv: string[]): CliOptions {
     command,
     filePath,
     json,
-    workspaceRoot
+    workspaceRoot,
+    typeCheckMode
   };
+}
+
+function parseTypeCheckMode(value: string): TypeCheckMode {
+  if (value === 'loose' || value === 'strict') {
+    return value;
+  }
+  throw new Error(`Unknown typecheck mode: ${value}`);
 }
 
 function severityName(severity: DiagnosticSeverity | undefined): string {
@@ -213,7 +248,7 @@ async function checkFile(options: CliOptions): Promise<number> {
     documents,
     URI.file(absoluteWorkspaceRoot).toString()
   );
-  const validator = new DocumentValidator(workspace);
+  const validator = new DocumentValidator(workspace, undefined, { typeCheckMode: options.typeCheckMode });
   const diagnostics = validator.collectDiagnostics(doc);
 
   if (options.json) {

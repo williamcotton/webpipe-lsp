@@ -237,6 +237,23 @@ export const configDocs: Record<string, ConfigDoc> = {
       'config graphql {\n  endpoint: "/graphql"\n}',
       'config graphql {\n  endpoint: "/api/graphql"\n}'
     ]
+  },
+
+  typecheck: {
+    name: 'typecheck',
+    description: 'Pipeline type checking configuration for the LSP and webpipe-lsp check command.',
+    options: [
+      {
+        name: 'strict',
+        type: 'boolean',
+        description: 'Require assert or validate contracts before opaque values from pg, fetch, graphql, lua, js, raw pg, or request body are consumed or returned',
+        default: 'false',
+        required: false
+      }
+    ],
+    examples: [
+      'config typecheck {\n  strict: true\n}'
+    ]
   }
 };
 

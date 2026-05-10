@@ -1,6 +1,6 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
-import { VALID_HTTP_METHODS, KNOWN_MIDDLEWARE, KNOWN_STEPS } from './constants';
+import { VALID_HTTP_METHODS, KNOWN_CONFIGS, KNOWN_MIDDLEWARE, KNOWN_STEPS } from './constants';
 import { collectHandlebarsSymbols } from './symbol-collector';
 import { WorkspaceManager } from './workspace-manager';
 import { SymbolResolver } from './symbol-resolver';
@@ -8,6 +8,7 @@ import { Describe, Variable, NamedPipeline, PipelineStep, Program } from 'webpip
 import { findTestContextAtOffset, extractHandlebarsVariables, extractJqVariables, escapeRegex } from './test-variable-utils';
 import { getPipelineReferenceFromStep, walkPipelineSteps } from './ast-utils';
 import { checkProgramTypes } from './type-checker';
+import type { TypeCheckMode } from './type-checker';
 
 interface DiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
@@ -17,10 +18,14 @@ interface DiagnosticSink {
   sendDiagnostics(payload: { uri: string; diagnostics: Diagnostic[] }): void;
 }
 
+export interface DocumentValidatorOptions {
+  typeCheckMode?: TypeCheckMode;
+}
+
 export class DocumentValidator {
   private symbolResolver: SymbolResolver;
 
-  constructor(private workspace: WorkspaceManager, private sink?: DiagnosticSink) {
+  constructor(private workspace: WorkspaceManager, private sink?: DiagnosticSink, private options: DocumentValidatorOptions = {}) {
     this.symbolResolver = new SymbolResolver();
   }
 
@@ -89,7 +94,7 @@ export class DocumentValidator {
       this.validatePipelineSteps(mergedProgram, variablesByType, pipelineNames, push, doc);
 
       // Pipeline shape checking: route inputs, middleware envelopes, assert contracts, jq filters, result, async/join.
-      checkProgramTypes(mergedProgram, push);
+      checkProgramTypes(mergedProgram, push, { mode: this.options.typeCheckMode });
 
       // Unified AST-based BDD validation (replaces regex-based when clause validation)
       this.validateBDDReferences(program, variablesByType, pipelineNames, routePatterns, push, doc);
@@ -150,13 +155,13 @@ export class DocumentValidator {
     // Use AST to validate config blocks
     for (const config of program.configs) {
       const name = config.name;
-      if (!KNOWN_MIDDLEWARE.has(name)) {
+      if (!KNOWN_CONFIGS.has(name)) {
         // Calculate position of the name within the config declaration
         push(
           DiagnosticSeverity.Error,
           config.start + 'config '.length,
           config.start + 'config '.length + name.length,
-          `Unknown middleware in config: ${name}`
+          `Unknown config block: ${name}`
         );
       }
     }

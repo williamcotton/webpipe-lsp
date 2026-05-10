@@ -15,6 +15,16 @@ export interface TypeDiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
 }
 
+export type TypeCheckMode = 'loose' | 'strict';
+
+export interface TypeCheckOptions {
+  mode?: TypeCheckMode;
+}
+
+interface ResolvedTypeCheckOptions {
+  mode: TypeCheckMode;
+}
+
 type StageShape =
   | { kind: 'unknown' }
   | { kind: 'null' }
@@ -49,9 +59,28 @@ interface TypeContext {
   program: Program;
   pipelines: Map<string, NamedPipeline>;
   variables: Map<string, Variable>;
-  asyncTasks: Map<string, StageShape>;
+  asyncTasks: Map<string, PipelineTypeState>;
   resolving: Set<string>;
+  options: ResolvedTypeCheckOptions;
   push: TypeDiagnosticPush;
+}
+
+type UnknownProducer = 'pg' | 'fetch' | 'graphql' | 'lua' | 'js' | 'route-body' | 'pipeline' | 'custom';
+
+interface UnknownDebt {
+  id: string;
+  producer: UnknownProducer;
+  reason: string;
+  path: PathSegment[];
+  start: number;
+  end: number;
+  clearWith: 'assert' | 'validate-or-assert' | 'typed-middleware-contract';
+  latent?: boolean;
+}
+
+interface PipelineTypeState {
+  shape: StageShape;
+  debts: UnknownDebt[];
 }
 
 interface JqFilterSource {
@@ -78,33 +107,62 @@ const stringShape: StageShape = { kind: 'string' };
 const numberShape: StageShape = { kind: 'number' };
 const booleanShape: StageShape = { kind: 'boolean' };
 const nullShape: StageShape = { kind: 'null' };
+let debtCounter = 0;
 
-export function checkProgramTypes(program: Program, push: TypeDiagnosticPush): void {
+function stateOf(shape: StageShape, debts: UnknownDebt[] = []): PipelineTypeState {
+  return { shape, debts };
+}
+
+function withShape(state: PipelineTypeState, shape: StageShape): PipelineTypeState {
+  return { shape, debts: state.debts };
+}
+
+function resolveTypeCheckOptions(program: Program, options: TypeCheckOptions): ResolvedTypeCheckOptions {
+  if (options.mode) {
+    return { mode: options.mode };
+  }
+  return { mode: readBooleanConfig(program, 'typecheck', 'strict') ? 'strict' : 'loose' };
+}
+
+function readBooleanConfig(program: Program, name: string, key: string): boolean | undefined {
+  const config = (program.configs || []).slice().reverse().find(item => item.name === name);
+  const property = config?.properties.find(item => item.key === key);
+  const value = property?.value;
+  return value?.kind === 'Boolean' ? value.value : undefined;
+}
+
+export function checkProgramTypes(program: Program, push: TypeDiagnosticPush, options: TypeCheckOptions = {}): void {
+  const resolvedOptions = resolveTypeCheckOptions(program, options);
   const ctx: TypeContext = {
     program,
     pipelines: new Map((program.pipelines || []).map(pipeline => [pipeline.name, pipeline])),
     variables: new Map((program.variables || []).map(variable => [`${variable.varType}:${variable.name}`, variable])),
     asyncTasks: new Map(),
     resolving: new Set(),
+    options: resolvedOptions,
     push
   };
 
   for (const route of program.routes || []) {
-    checkPipelineRef(route.pipeline, routeInputShape(route), ctx);
+    const output = checkPipelineRef(route.pipeline, routeInputState(route), ctx);
+    pushExitDebtDiagnostics(output, ctx, 'route');
   }
 
   for (const query of program.queries || []) {
-    checkPipeline(query.pipeline, graphqlResolverInputShape(), { ...ctx, asyncTasks: new Map(), resolving: new Set(ctx.resolving) });
+    const output = checkPipeline(query.pipeline, stateOf(graphqlResolverInputShape()), { ...ctx, asyncTasks: new Map(), resolving: new Set(ctx.resolving) });
+    pushExitDebtDiagnostics(output, ctx, 'GraphQL query resolver');
   }
   for (const mutation of program.mutations || []) {
-    checkPipeline(mutation.pipeline, graphqlResolverInputShape(), { ...ctx, asyncTasks: new Map(), resolving: new Set(ctx.resolving) });
+    const output = checkPipeline(mutation.pipeline, stateOf(graphqlResolverInputShape()), { ...ctx, asyncTasks: new Map(), resolving: new Set(ctx.resolving) });
+    pushExitDebtDiagnostics(output, ctx, 'GraphQL mutation resolver');
   }
   for (const resolver of program.resolvers || []) {
-    checkPipeline(resolver.pipeline, graphqlResolverInputShape(), { ...ctx, asyncTasks: new Map(), resolving: new Set(ctx.resolving) });
+    const output = checkPipeline(resolver.pipeline, stateOf(graphqlResolverInputShape()), { ...ctx, asyncTasks: new Map(), resolving: new Set(ctx.resolving) });
+    pushExitDebtDiagnostics(output, ctx, 'GraphQL field resolver');
   }
 }
 
-function checkPipelineRef(ref: PipelineRef, input: StageShape, ctx: TypeContext): StageShape {
+function checkPipelineRef(ref: PipelineRef, input: PipelineTypeState, ctx: TypeContext): PipelineTypeState {
   if (ref.kind === 'Inline') {
     return checkPipeline(ref.pipeline, input, ctx);
   }
@@ -112,14 +170,14 @@ function checkPipelineRef(ref: PipelineRef, input: StageShape, ctx: TypeContext)
   return checkNamedPipeline(ref.name, input, ctx, ref.start, ref.end);
 }
 
-function checkNamedPipeline(name: string, input: StageShape, ctx: TypeContext, start: number, end: number): StageShape {
+function checkNamedPipeline(name: string, input: PipelineTypeState, ctx: TypeContext, start: number, end: number): PipelineTypeState {
   const pipeline = findPipeline(ctx, name);
   if (!pipeline) {
     ctx.push(DiagnosticSeverity.Error, start, end, `Unknown pipeline '${name}'`);
-    return unknownShape;
+    return stateOf(unknownShape);
   }
   if (ctx.resolving.has(name)) {
-    return unknownShape;
+    return stateOf(unknownShape);
   }
 
   const childCtx: TypeContext = {
@@ -130,7 +188,7 @@ function checkNamedPipeline(name: string, input: StageShape, ctx: TypeContext, s
   return checkPipeline(pipeline.pipeline, input, childCtx);
 }
 
-function checkPipeline(pipeline: Pipeline, input: StageShape, ctx: TypeContext): StageShape {
+function checkPipeline(pipeline: Pipeline, input: PipelineTypeState, ctx: TypeContext): PipelineTypeState {
   let current = input;
   const steps = pipeline.steps || [];
 
@@ -164,7 +222,10 @@ function checkPipeline(pipeline: Pipeline, input: StageShape, ctx: TypeContext):
       const elseShape = step.elseBranch
         ? checkPipeline(step.elseBranch, current, { ...ctx, asyncTasks: new Map(ctx.asyncTasks) })
         : current;
-      current = unionShape([thenShape, elseShape]);
+      current = {
+        shape: unionShape([thenShape.shape, elseShape.shape]),
+        debts: dedupeDebts([...thenShape.debts, ...elseShape.debts])
+      };
       continue;
     }
 
@@ -175,23 +236,30 @@ function checkPipeline(pipeline: Pipeline, input: StageShape, ctx: TypeContext):
       if (step.default) {
         branches.push(checkPipeline(step.default, current, { ...ctx, asyncTasks: new Map(ctx.asyncTasks) }));
       }
-      current = branches.length > 0 ? unionShape(branches) : current;
+      current = branches.length > 0
+        ? {
+            shape: unionShape(branches.map(branch => branch.shape)),
+            debts: dedupeDebts(branches.flatMap(branch => branch.debts))
+          }
+        : current;
       continue;
     }
 
     if (step.kind === 'Foreach') {
-      checkPipeline(step.pipeline, unknownShape, { ...ctx, asyncTasks: new Map(ctx.asyncTasks) });
-      current = current.kind === 'unknown' ? unknownShape : current;
+      checkPipeline(step.pipeline, stateOf(unknownShape), { ...ctx, asyncTasks: new Map(ctx.asyncTasks) });
+      current = current.shape.kind === 'unknown' ? stateOf(unknownShape, current.debts) : current;
     }
   }
 
   return current;
 }
 
-function checkRegularStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: StageShape, ctx: TypeContext, allowAsync: boolean, isLastStep: boolean): StageShape {
+function checkRegularStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: PipelineTypeState, ctx: TypeContext, allowAsync: boolean, isLastStep: boolean): PipelineTypeState {
   if (allowAsync && getTagArg(step.condition, 'async')) {
     return input;
   }
+
+  checkStepArgDebtAccesses(step, input, ctx);
 
   switch (step.name) {
     case 'jq':
@@ -201,18 +269,20 @@ function checkRegularStep(step: Extract<PipelineStep, { kind: 'Regular' }>, inpu
     case 'validate':
       return checkValidateStep(step, input, ctx);
     case 'pg':
-      return applyDataMiddlewareShape(input, pgResultShape(step.config), step, ctx);
+      return applyDataMiddlewareState(input, pgResultShape(step.config), step, ctx);
     case 'fetch':
-      return applyDataMiddlewareShape(input, fetchResultShape(), step, ctx);
+      return applyDataMiddlewareState(input, fetchResultShape(), step, ctx);
     case 'graphql':
-      return applyDataMiddlewareShape(input, graphqlResultShape(), step, ctx);
+      return applyDataMiddlewareState(input, graphqlResultShape(), step, ctx);
     case 'auth':
-      return applyAuthShape(input, step);
+      return withShape(input, applyAuthShape(input.shape, step));
     case 'handlebars':
-      return { kind: 'string', contentType: 'text/html' };
+      pushStepDebtDiagnostics(input, step, ctx, 'handlebars renders');
+      return stateOf({ kind: 'string', contentType: 'text/html' });
     case 'lua':
+      return transformUnknownState(input, step, 'lua');
     case 'js':
-      return unknownShape;
+      return transformUnknownState(input, step, 'js');
     case 'join':
       return applyJoinShape(input, step, ctx);
     case 'pipeline':
@@ -228,15 +298,17 @@ function checkRegularStep(step: Extract<PipelineStep, { kind: 'Regular' }>, inpu
   }
 }
 
-function checkJqStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: StageShape, ctx: TypeContext, isLastStep: boolean): StageShape {
+function checkJqStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: PipelineTypeState, ctx: TypeContext, isLastStep: boolean): PipelineTypeState {
   const filter = resolveJqFilterSource(step, ctx);
   if (!filter) {
-    return applyTransformShape(input, unknownShape, isLastStep);
+    return applyTransformState(input, unknownShape, isLastStep);
   }
 
   const pathDiagnostics: JqPathDiagnostic[] = [];
-  for (const access of scanRootFieldAccesses(filter.source)) {
-    const problem = validatePath(input, access.path);
+  const rootAccesses = scanRootFieldAccesses(filter.source);
+  const strictRootAccesses = scanRootFieldAccesses(filter.source, 1);
+  for (const access of rootAccesses) {
+    const problem = validatePath(input.shape, access.path);
     if (problem) {
       const missingField = missingFieldFromProblem(problem);
       pathDiagnostics.push({
@@ -247,26 +319,27 @@ function checkJqStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: St
       });
     }
   }
+  pushStrictDebtAccessDiagnostics(strictRootAccesses, input, ctx, filter);
 
   try {
     const jqtype = jqtypeModule as any;
     const checker = new jqtype.JqTypeChecker();
-    const inputShape = jqtype.InputShape.fromJsonSchema(toJsonSchema(input));
+    const inputShape = jqtype.InputShape.fromJsonSchema(toJsonSchema(input.shape));
     const options = createAnalyzeOptions(jqtype);
     const report = checker.analyzeFilter(filter.source, inputShape, options);
 
     const jqtypeMissingProperties = pushJqtypeDiagnostics(report, filter, ctx);
-    pushPipelinePathDiagnostics(pathDiagnostics, jqtypeMissingProperties, input, ctx);
+    pushPipelinePathDiagnostics(pathDiagnostics, jqtypeMissingProperties, input.shape, ctx);
 
     const outputSchemaValue = jqtype.AnalyzeReport?.toJsonSchemaValue
       ? jqtype.AnalyzeReport.toJsonSchemaValue(report)
       : undefined;
 
     if (outputSchemaValue) {
-      return applyTransformShape(input, fromJsonSchema(outputSchemaValue.schema ?? outputSchemaValue), isLastStep);
+      return applyTransformState(input, fromJsonSchema(outputSchemaValue.schema ?? outputSchemaValue), isLastStep);
     }
 
-    return applyTransformShape(input, report?.output ? fromJqtypeOutput(report.output, jqtype) : unknownShape, isLastStep);
+    return applyTransformState(input, report?.output ? fromJqtypeOutput(report.output, jqtype) : unknownShape, isLastStep);
   } catch (err) {
     ctx.push(
       DiagnosticSeverity.Warning,
@@ -274,7 +347,7 @@ function checkJqStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: St
       filter.diagnosticEnd,
       `Could not type-check jq filter with jqtype: ${err instanceof Error ? err.message : String(err)}`
     );
-    return applyTransformShape(input, unknownShape, isLastStep);
+    return applyTransformState(input, unknownShape, isLastStep);
   }
 }
 
@@ -397,7 +470,7 @@ function inferJqOutputShape(source: string, input: StageShape): StageShape {
   }
 }
 
-function checkAssertStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: StageShape, ctx: TypeContext): StageShape {
+function checkAssertStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: PipelineTypeState, ctx: TypeContext): PipelineTypeState {
   const contract = resolveAssertContract(step, ctx);
   if (!contract) {
     return input;
@@ -409,20 +482,23 @@ function checkAssertStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input
     return input;
   }
 
-  const issue = findRequiredFieldMismatch(input, parsed.shape);
+  const issue = findRequiredFieldMismatch(input.shape, parsed.shape);
   if (issue) {
     ctx.push(
       DiagnosticSeverity.Warning,
       contract.start,
       contract.end,
-      `Assert contract expects ${issue}, but previous stage output is ${renderShape(input)}.`
+      `Assert contract expects ${issue}, but previous stage output is ${renderShape(input.shape)}.`
     );
   }
 
-  return mergeObjectShapes(input, parsed.shape);
+  return {
+    shape: mergeObjectShapes(input.shape, parsed.shape),
+    debts: clearDebtsWithAssert(input.debts, parsed.shape)
+  };
 }
 
-function checkValidateStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: StageShape, ctx: TypeContext): StageShape {
+function checkValidateStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: PipelineTypeState, ctx: TypeContext): PipelineTypeState {
   const parsed = parseShapeSchema(step.config, true);
   if (!parsed.ok) {
     ctx.push(
@@ -434,20 +510,31 @@ function checkValidateStep(step: Extract<PipelineStep, { kind: 'Regular' }>, inp
     return input;
   }
 
-  const object = asObjectShape(input);
+  const object = asObjectShape(input.shape);
   object.fields.body = { shape: parsed.shape };
-  return object;
+  return {
+    shape: object,
+    debts: clearRouteBodyDebts(input.debts, parsed.shape)
+  };
 }
 
-function checkResultStep(step: Extract<PipelineStep, { kind: 'Result' }>, input: StageShape, ctx: TypeContext): StageShape {
+function checkResultStep(step: Extract<PipelineStep, { kind: 'Result' }>, input: PipelineTypeState, ctx: TypeContext): PipelineTypeState {
   const branches = step.branches.map(branch => {
-    const body = checkPipeline(branch.pipeline, resultBranchInputShape(input, branch.branchType), { ...ctx, asyncTasks: new Map(ctx.asyncTasks) });
-    return objectShape({
+    const body = checkPipeline({ ...branch.pipeline }, withShape(input, resultBranchInputShape(input.shape, branch.branchType)), { ...ctx, asyncTasks: new Map(ctx.asyncTasks) });
+    return {
+      shape: objectShape({
       status: { shape: { kind: 'number', literal: branch.statusCode } },
-      body: { shape: body }
-    });
+      body: { shape: body.shape }
+      }),
+      debts: body.debts
+    };
   });
-  return branches.length > 0 ? unionShape(branches) : input;
+  return branches.length > 0
+    ? {
+        shape: unionShape(branches.map(branch => branch.shape)),
+        debts: dedupeDebts(branches.flatMap(branch => branch.debts))
+      }
+    : input;
 }
 
 function resolveAssertContract(step: Extract<PipelineStep, { kind: 'Regular' }>, ctx: TypeContext): { source: string; start: number; end: number } | undefined {
@@ -477,16 +564,23 @@ function findPipeline(ctx: TypeContext, ref: string): NamedPipeline | undefined 
   return ctx.pipelines.get(trimmed) || ctx.pipelines.get(trimmed.split('::').pop() || trimmed);
 }
 
-function applyPipelineArgs(step: Extract<PipelineStep, { kind: 'Regular' }>, input: StageShape, _ctx: TypeContext): StageShape {
+function applyPipelineArgs(step: Extract<PipelineStep, { kind: 'Regular' }>, input: PipelineTypeState, ctx: TypeContext): PipelineTypeState {
   if (!step.args.length) {
     return input;
   }
 
-  const argShape = inferJqOutputShape(step.args[0], input);
-  if (input.kind === 'object' && argShape.kind === 'object') {
-    return mergeObjectShapes(input, argShape);
+  checkJqSourceDebtAccesses(step.args[0], input, ctx, {
+    source: step.args[0],
+    diagnosticStart: step.nameStart,
+    diagnosticEnd: step.nameEnd,
+    preciseSpans: false
+  });
+
+  const argShape = inferJqOutputShape(step.args[0], input.shape);
+  if (input.shape.kind === 'object' && argShape.kind === 'object') {
+    return withShape(input, mergeObjectShapes(input.shape, argShape));
   }
-  return argShape;
+  return stateOf(argShape);
 }
 
 function applyDataMiddlewareShape(input: StageShape, result: StageShape, step: Extract<PipelineStep, { kind: 'Regular' }>, ctx: TypeContext): StageShape {
@@ -508,6 +602,52 @@ function applyDataMiddlewareShape(input: StageShape, result: StageShape, step: E
   return mergeObjectShapes(input, objectShape({
     data: { shape: result }
   }));
+}
+
+function applyDataMiddlewareState(input: PipelineTypeState, result: StageShape, step: Extract<PipelineStep, { kind: 'Regular' }>, ctx: TypeContext): PipelineTypeState {
+  const targetName = getResultTargetName(step, ctx, input.shape);
+
+  if (step.name === 'pg' && step.config.trim().startsWith('!raw')) {
+    if (targetName) {
+      const shape = mergeObjectShapes(input.shape, objectShape({
+        data: {
+          shape: objectShape({
+            [targetName]: { shape: unknownShape }
+          })
+        }
+      }));
+      return {
+        shape,
+        debts: addDebts(input.debts, [
+          makeDebt(step, 'pg', 'raw pg result', [...dataOutputPath(targetName)], 'assert')
+        ])
+      };
+    }
+
+    return {
+      shape: unknownShape,
+      debts: addDebts(input.debts, [
+        makeDebt(step, 'pg', 'raw pg result', [], 'assert')
+      ])
+    };
+  }
+
+  const shape = applyDataMiddlewareShape(input.shape, result, step, ctx);
+  const basePath = dataOutputPath(targetName);
+  const debts: UnknownDebt[] = [];
+
+  if (step.name === 'pg') {
+    debts.push(makeDebt(step, 'pg', 'pg row data', [...basePath, fieldSegment('rows'), indexSegment()], 'assert'));
+  } else if (step.name === 'fetch') {
+    debts.push(makeDebt(step, 'fetch', 'fetch response body', [...basePath, fieldSegment('response')], 'assert'));
+  } else if (step.name === 'graphql') {
+    debts.push(makeDebt(step, 'graphql', 'graphql data payload', [...basePath, fieldSegment('data')], 'assert'));
+  }
+
+  return {
+    shape,
+    debts: addDebts(input.debts, debts)
+  };
 }
 
 function getResultTargetName(step: Extract<PipelineStep, { kind: 'Regular' }>, ctx: TypeContext, input: StageShape): string | undefined {
@@ -540,19 +680,43 @@ function applyAuthShape(input: StageShape, step: Extract<PipelineStep, { kind: '
   }));
 }
 
-function applyJoinShape(input: StageShape, step: Extract<PipelineStep, { kind: 'Regular' }>, ctx: TypeContext): StageShape {
+function applyJoinShape(input: PipelineTypeState, step: Extract<PipelineStep, { kind: 'Regular' }>, ctx: TypeContext): PipelineTypeState {
   const targets = step.parsedJoinTargets && step.parsedJoinTargets.length > 0
     ? step.parsedJoinTargets
     : step.config.split(',').map(target => target.trim()).filter(Boolean);
 
   const asyncFields: Record<string, ShapeField> = {};
+  const joinedDebts: UnknownDebt[] = [];
   for (const target of targets) {
-    asyncFields[target] = { shape: ctx.asyncTasks.get(target) || unknownShape };
+    const task = ctx.asyncTasks.get(target) || stateOf(unknownShape);
+    asyncFields[target] = { shape: task.shape };
+    joinedDebts.push(...prefixDebts(task.debts, [fieldSegment('async'), fieldSegment(target)]));
   }
 
-  return mergeObjectShapes(input, objectShape({
+  return {
+    shape: mergeObjectShapes(input.shape, objectShape({
     async: { shape: objectShape(asyncFields, true) }
-  }));
+    })),
+    debts: addDebts(input.debts, joinedDebts)
+  };
+}
+
+function routeInputState(route: Route): PipelineTypeState {
+  const shape = routeInputShape(route);
+  const debts = ['POST', 'PUT', 'PATCH'].includes(route.method)
+    ? [
+        makeDebtFromParts({
+          producer: 'route-body',
+          reason: 'request body',
+          path: [fieldSegment('body')],
+          start: route.start,
+          end: route.start + route.method.length,
+          clearWith: 'validate-or-assert',
+          latent: true
+        })
+      ]
+    : [];
+  return stateOf(shape, debts);
 }
 
 function routeInputShape(route: Route): StageShape {
@@ -706,6 +870,27 @@ function applyTransformShape(input: StageShape, output: StageShape, isLastStep: 
   return restoreRuntimeKeys(input, output);
 }
 
+function applyTransformState(input: PipelineTypeState, output: StageShape, isLastStep: boolean): PipelineTypeState {
+  const shape = applyTransformShape(input.shape, output, isLastStep);
+  if (isLastStep) {
+    return stateOf(shape);
+  }
+  return {
+    shape,
+    debts: preserveRestoredRuntimeKeyDebts(input, output)
+  };
+}
+
+function preserveRestoredRuntimeKeyDebts(input: PipelineTypeState, output: StageShape): UnknownDebt[] {
+  if (input.shape.kind !== 'object' || output.kind !== 'object') {
+    return [];
+  }
+  return input.debts.filter(debt => {
+    const first = debt.path.find(segment => segment.kind === 'field')?.name;
+    return !!first && RUNTIME_KEYS.includes(first) && !output.fields[first];
+  });
+}
+
 function restoreRuntimeKeys(input: StageShape, output: StageShape): StageShape {
   if (output.kind === 'union') {
     return unionShape(output.members.map(member => restoreRuntimeKeys(input, member)));
@@ -735,6 +920,230 @@ function getLiteralStringProp(shape: StageShape, field: string): string | undefi
   if (shape.kind !== 'object') return undefined;
   const prop = shape.fields[field]?.shape;
   return prop?.kind === 'string' ? prop.literal : undefined;
+}
+
+function fieldSegment(name: string): PathSegment {
+  return { kind: 'field', name };
+}
+
+function indexSegment(): PathSegment {
+  return { kind: 'index' };
+}
+
+function dataOutputPath(targetName: string | undefined): PathSegment[] {
+  return targetName
+    ? [fieldSegment('data'), fieldSegment(targetName)]
+    : [fieldSegment('data')];
+}
+
+function makeDebt(step: Extract<PipelineStep, { kind: 'Regular' }>, producer: UnknownProducer, reason: string, path: PathSegment[], clearWith: UnknownDebt['clearWith']): UnknownDebt {
+  return makeDebtFromParts({
+    producer,
+    reason,
+    path,
+    start: step.nameStart,
+    end: step.nameEnd,
+    clearWith
+  });
+}
+
+function makeDebtFromParts(parts: Omit<UnknownDebt, 'id'>): UnknownDebt {
+  return {
+    id: `${parts.producer}:${parts.start}:${parts.end}:${debtCounter++}`,
+    ...parts
+  };
+}
+
+function addDebts(existing: UnknownDebt[], incoming: UnknownDebt[]): UnknownDebt[] {
+  return dedupeDebts([...existing, ...incoming]);
+}
+
+function dedupeDebts(debts: UnknownDebt[]): UnknownDebt[] {
+  const seen = new Set<string>();
+  const result: UnknownDebt[] = [];
+  for (const debt of debts) {
+    const key = `${debt.producer}:${renderDebtPath(debt.path)}:${debt.start}:${debt.end}:${debt.latent ? 'latent' : 'active'}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(debt);
+  }
+  return result;
+}
+
+function prefixDebts(debts: UnknownDebt[], prefix: PathSegment[]): UnknownDebt[] {
+  return debts.map(debt => ({
+    ...debt,
+    id: `${debt.id}@${renderDebtPath(prefix)}`,
+    path: [...prefix, ...debt.path]
+  }));
+}
+
+function clearDebtsWithAssert(debts: UnknownDebt[], asserted: StageShape): UnknownDebt[] {
+  return debts.filter(debt => {
+    if (debt.path.length === 0) {
+      return asserted.kind === 'unknown';
+    }
+    return !contractCoversPath(asserted, debt.path);
+  });
+}
+
+function clearRouteBodyDebts(debts: UnknownDebt[], bodyShape: StageShape): UnknownDebt[] {
+  const asserted = objectShape({ body: { shape: bodyShape } });
+  return debts.filter(debt => {
+    if (debt.producer !== 'route-body') return true;
+    return !contractCoversPath(asserted, debt.path);
+  });
+}
+
+function contractCoversPath(shape: StageShape, path: PathSegment[]): boolean {
+  if (path.length === 0) {
+    return shape.kind !== 'unknown';
+  }
+  if (shape.kind === 'union') {
+    return shape.members.some(member => contractCoversPath(member, path));
+  }
+  const [head, ...tail] = path;
+  if (head.kind === 'index') {
+    return shape.kind === 'array' && contractCoversPath(shape.item, tail);
+  }
+  if (shape.kind !== 'object') {
+    return false;
+  }
+  const field = shape.fields[head.name!];
+  if (!field || field.optional) {
+    return false;
+  }
+  return contractCoversPath(field.shape, tail);
+}
+
+function transformUnknownState(input: PipelineTypeState, step: Extract<PipelineStep, { kind: 'Regular' }>, producer: 'lua' | 'js'): PipelineTypeState {
+  return {
+    shape: unknownShape,
+    debts: addDebts(input.debts, [
+      makeDebt(step, producer, `${producer} output`, [], 'assert')
+    ])
+  };
+}
+
+function checkStepArgDebtAccesses(step: Extract<PipelineStep, { kind: 'Regular' }>, input: PipelineTypeState, ctx: TypeContext): void {
+  for (const arg of step.args || []) {
+    checkJqSourceDebtAccesses(arg, input, ctx, {
+      source: arg,
+      diagnosticStart: step.nameStart,
+      diagnosticEnd: step.nameEnd,
+      preciseSpans: false
+    });
+  }
+}
+
+function checkJqSourceDebtAccesses(source: string, input: PipelineTypeState, ctx: TypeContext, span: JqFilterSource): void {
+  const accesses = scanRootFieldAccesses(source, 1);
+  pushStrictDebtAccessDiagnostics(accesses, input, ctx, span);
+}
+
+function pushStrictDebtAccessDiagnostics(
+  accesses: Array<{ path: PathSegment[]; start: number; end: number }>,
+  input: PipelineTypeState,
+  ctx: TypeContext,
+  filter: JqFilterSource
+): void {
+  if (ctx.options.mode !== 'strict') return;
+  const emitted = new Set<string>();
+  for (const access of accesses) {
+    const debt = input.debts.find(item => pathTouchesDebt(access.path, item.path));
+    if (!debt) continue;
+    const key = `${renderDebtPath(access.path)}:${debt.id}`;
+    if (emitted.has(key)) continue;
+    emitted.add(key);
+    ctx.push(
+      DiagnosticSeverity.Error,
+      filter.preciseSpans ? filter.diagnosticStart + access.start : filter.diagnosticStart,
+      filter.preciseSpans ? filter.diagnosticStart + access.end : filter.diagnosticEnd,
+      strictConsumerMessage(access.path, debt)
+    );
+  }
+}
+
+function pushStepDebtDiagnostics(input: PipelineTypeState, step: Extract<PipelineStep, { kind: 'Regular' }>, ctx: TypeContext, action: string): void {
+  if (ctx.options.mode !== 'strict') return;
+  for (const debt of input.debts.filter(debt => !debt.latent)) {
+    ctx.push(
+      DiagnosticSeverity.Error,
+      step.nameStart,
+      step.nameEnd,
+      `Strict type error: ${action} ${describeDebt(debt)}. ${clearDebtHint(debt)}`
+    );
+  }
+}
+
+function pushExitDebtDiagnostics(state: PipelineTypeState, ctx: TypeContext, owner: string): void {
+  if (ctx.options.mode !== 'strict') return;
+  for (const debt of state.debts.filter(debt => !debt.latent)) {
+    ctx.push(
+      DiagnosticSeverity.Error,
+      debt.start,
+      debt.end,
+      `Strict type error: ${owner} returns ${describeDebt(debt)}. ${clearDebtHint(debt)}`
+    );
+  }
+}
+
+function pathTouchesDebt(accessPath: PathSegment[], debtPath: PathSegment[]): boolean {
+  if (debtPath.length === 0) {
+    return true;
+  }
+  return isPathPrefix(accessPath, debtPath) || isPathPrefix(debtPath, accessPath);
+}
+
+function isPathPrefix(prefix: PathSegment[], full: PathSegment[]): boolean {
+  if (prefix.length > full.length) return false;
+  return prefix.every((segment, index) => segmentsCompatible(segment, full[index]));
+}
+
+function segmentsCompatible(left: PathSegment, right: PathSegment): boolean {
+  if (left.kind === 'index' || right.kind === 'index') {
+    return left.kind === right.kind;
+  }
+  return left.name === right.name;
+}
+
+function strictConsumerMessage(accessPath: PathSegment[], debt: UnknownDebt): string {
+  return `Strict type error: ${pathToJq(accessPath)} reads ${describeDebt(debt)}. ${clearDebtHint(debt)}`;
+}
+
+function describeDebt(debt: UnknownDebt): string {
+  const path = renderDebtPath(debt.path);
+  switch (debt.producer) {
+    case 'pg':
+      return `${path} from an unasserted pg result`;
+    case 'fetch':
+      return `${path} from an unasserted fetch response`;
+    case 'graphql':
+      return `${path} from an unasserted graphql result`;
+    case 'lua':
+      return `${path} from unasserted lua output`;
+    case 'js':
+      return `${path} from unasserted js output`;
+    case 'route-body':
+      return `${path} from an unvalidated request body`;
+    default:
+      return `${path} from ${debt.reason}`;
+  }
+}
+
+function clearDebtHint(debt: UnknownDebt): string {
+  return debt.clearWith === 'validate-or-assert'
+    ? 'Add validate or assert before consuming it.'
+    : 'Add an assert contract before consuming or returning it.';
+}
+
+function renderDebtPath(path: PathSegment[]): string {
+  if (path.length === 0) return '$';
+  let out = '';
+  for (const segment of path) {
+    out += segment.kind === 'field' ? `.${segment.name}` : '[]';
+  }
+  return out;
 }
 
 function findVariable(ctx: TypeContext, type: string, ref: string): Variable | undefined {
@@ -905,7 +1314,7 @@ function findRequiredFieldMismatch(actual: StageShape, expected: StageShape, pat
   return undefined;
 }
 
-function scanRootFieldAccesses(filter: string): Array<{ path: PathSegment[]; start: number; end: number }> {
+function scanRootFieldAccesses(filter: string, minFieldCount = 2): Array<{ path: PathSegment[]; start: number; end: number }> {
   const accesses: Array<{ path: PathSegment[]; start: number; end: number }> = [];
   let inString = false;
   let escaped = false;
@@ -955,7 +1364,7 @@ function scanRootFieldAccesses(filter: string): Array<{ path: PathSegment[]; sta
     }
 
     const fieldCount = path.filter(segment => segment.kind === 'field').length;
-    if (fieldCount >= 2 && !isNullAlternativeOperand(filter, start, j)) {
+    if (fieldCount >= minFieldCount && !isNullAlternativeOperand(filter, start, j)) {
       accesses.push({ path, start, end: j });
     }
     i = Math.max(i, j - 1);

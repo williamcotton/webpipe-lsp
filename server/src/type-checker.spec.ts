@@ -5,6 +5,7 @@ import { DiagnosticSeverity } from 'vscode-languageserver/node';
 import { parseProgram } from 'webpipe-js';
 
 import { checkProgramTypes } from './type-checker';
+import type { TypeCheckOptions } from './type-checker';
 
 interface TypeDiagnostic {
   severity: DiagnosticSeverity;
@@ -13,18 +14,18 @@ interface TypeDiagnostic {
   message: string;
 }
 
-function collectTypeDiagnosticDetails(source: string): TypeDiagnostic[] {
+function collectTypeDiagnosticDetails(source: string, options?: TypeCheckOptions): TypeDiagnostic[] {
   const diagnostics: TypeDiagnostic[] = [];
 
   checkProgramTypes(parseProgram(source), (severity: DiagnosticSeverity, start: number, end: number, message: string) => {
     diagnostics.push({ severity, start, end, message });
-  });
+  }, options);
 
   return diagnostics;
 }
 
-function collectTypeDiagnostics(source: string): string[] {
-  return collectTypeDiagnosticDetails(source).map(diagnostic => diagnostic.message);
+function collectTypeDiagnostics(source: string, options?: TypeCheckOptions): string[] {
+  return collectTypeDiagnosticDetails(source, options).map(diagnostic => diagnostic.message);
 }
 
 test('non-terminal jq transforms preserve route context for later stages', () => {
@@ -195,6 +196,228 @@ GET /hello/:world
   );
   assert.equal(
     messages.some(message => message.includes('property "wrld" is not present')),
+    true
+  );
+});
+
+test('strict mode flags pg rows consumed without assert', () => {
+  const messages = collectTypeDiagnostics(`
+GET /teams
+  |> jq: \`{ sqlParams: [] }\`
+  |> pg: \`SELECT * FROM teams\`
+  |> jq: \`{ names: .data.rows | map(.name) }\`
+`, { mode: 'strict' });
+
+  assert.equal(
+    messages.some(message => message.includes('Strict type error') && message.includes('unasserted pg result')),
+    true
+  );
+});
+
+test('loose mode still allows pg rows without assert', () => {
+  const messages = collectTypeDiagnostics(`
+GET /teams
+  |> jq: \`{ sqlParams: [] }\`
+  |> pg: \`SELECT * FROM teams\`
+  |> jq: \`{ names: .data.rows | map(.name) }\`
+`);
+
+  assert.equal(
+    messages.some(message => message.includes('Strict type error')),
+    false
+  );
+});
+
+test('strict mode accepts pg rows after assert and jqtype checks asserted fields', () => {
+  const messages = collectTypeDiagnostics(`
+assert TeamsPageState = \`{
+  data: {
+    rows: [{ id: string, name: string }],
+    rowCount: number
+  }
+}\`
+
+GET /teams
+  |> jq: \`{ sqlParams: [] }\`
+  |> pg: \`SELECT * FROM teams\`
+  |> assert: TeamsPageState
+  |> jq: \`{ names: .data.rows | map(.namei) }\`
+`, { mode: 'strict' });
+
+  assert.equal(
+    messages.some(message => message.includes('Strict type error')),
+    false
+  );
+  assert.equal(
+    messages.some(message => message.includes('property "namei" is not present')),
+    true
+  );
+});
+
+test('strict mode allows known pg rowCount without asserting row fields', () => {
+  const messages = collectTypeDiagnostics(`
+GET /teams/count
+  |> jq: \`{ sqlParams: [] }\`
+  |> pg: \`SELECT * FROM teams\`
+  |> jq: \`{ count: .data.rowCount }\`
+`, { mode: 'strict' });
+
+  assert.equal(
+    messages.some(message => message.includes('Strict type error')),
+    false
+  );
+});
+
+test('strict mode flags route exit with unasserted fetch response', () => {
+  const messages = collectTypeDiagnostics(`
+GET /proxy
+  |> jq: \`{ fetchUrl: "https://example.com", fetchMethod: "GET" }\`
+  |> fetch: \`_\`
+`, { mode: 'strict' });
+
+  assert.equal(
+    messages.some(message => message.includes('route returns') && message.includes('unasserted fetch response')),
+    true
+  );
+});
+
+test('strict mode accepts fetch async join after assert', () => {
+  const messages = collectTypeDiagnostics(`
+assert JoinedState = \`{
+  async: {
+    user: {
+      data: {
+        response: {
+          id: string,
+          login: string
+        }
+      }
+    }
+  }
+}\`
+
+GET /dashboard/:id
+  |> jq: \`{ fetchUrl: "https://example.com/users/" + .params.id, fetchMethod: "GET" }\`
+  |> fetch: \`_\` @async(user)
+  |> join: \`user\`
+  |> assert: JoinedState
+  |> jq: \`{ login: .async.user.data.response.login }\`
+`, { mode: 'strict' });
+
+  assert.equal(
+    messages.some(message => message.includes('Strict type error')),
+    false
+  );
+});
+
+test('strict mode flags lua output consumed without assert', () => {
+  const messages = collectTypeDiagnostics(`
+GET /lua
+  |> lua: \`return { message = "hi" }\`
+  |> jq: \`{ message: .message }\`
+`, { mode: 'strict' });
+
+  assert.equal(
+    messages.some(message => message.includes('Strict type error') && message.includes('unasserted lua output')),
+    true
+  );
+});
+
+test('strict mode flags raw pg output without assert', () => {
+  const messages = collectTypeDiagnostics(`
+GET /raw
+  |> jq: \`{ sqlParams: [] }\`
+  |> pg: \`!raw SELECT '{}'::json\`
+  |> jq: \`{ id: .id }\`
+`, { mode: 'strict' });
+
+  assert.equal(
+    messages.some(message => message.includes('Strict type error') && message.includes('unasserted pg result')),
+    true
+  );
+});
+
+test('strict mode accepts lua output after assert', () => {
+  const messages = collectTypeDiagnostics(`
+GET /lua
+  |> lua: \`return { message = "hi" }\`
+  |> assert: \`{ message: string }\`
+  |> jq: \`{ message: .message }\`
+`, { mode: 'strict' });
+
+  assert.equal(
+    messages.some(message => message.includes('Strict type error')),
+    false
+  );
+});
+
+test('strict mode flags request body reads without validate or assert', () => {
+  const messages = collectTypeDiagnostics(`
+POST /login
+  |> jq: \`{ login: .body.login }\`
+`, { mode: 'strict' });
+
+  assert.equal(
+    messages.some(message => message.includes('unvalidated request body')),
+    true
+  );
+});
+
+test('strict mode accepts request body reads after validate', () => {
+  const messages = collectTypeDiagnostics(`
+POST /login
+  |> validate: \`{
+    login: string(3..50),
+    password: string(6..100)
+  }\`
+  |> jq: \`{ login: .body.login }\`
+`, { mode: 'strict' });
+
+  assert.equal(
+    messages.some(message => message.includes('Strict type error')),
+    false
+  );
+});
+
+test('strict mode propagates debt through named pipelines and lets caller assert it', () => {
+  const messages = collectTypeDiagnostics(`
+assert TeamsPageState = \`{
+  data: {
+    rows: [{ id: string, name: string }],
+    rowCount: number
+  }
+}\`
+
+pipeline getTeams =
+  |> jq: \`{ sqlParams: [] }\`
+  |> pg: \`SELECT * FROM teams\`
+
+GET /teams
+  |> pipeline: getTeams
+  |> assert: TeamsPageState
+  |> jq: \`{ names: .data.rows | map(.name) }\`
+`, { mode: 'strict' });
+
+  assert.equal(
+    messages.some(message => message.includes('Strict type error')),
+    false
+  );
+});
+
+test('config typecheck strict enables strict mode', () => {
+  const messages = collectTypeDiagnostics(`
+config typecheck {
+  strict: true
+}
+
+GET /teams
+  |> jq: \`{ sqlParams: [] }\`
+  |> pg: \`SELECT * FROM teams\`
+  |> jq: \`{ names: .data.rows | map(.name) }\`
+`);
+
+  assert.equal(
+    messages.some(message => message.includes('Strict type error')),
     true
   );
 });
