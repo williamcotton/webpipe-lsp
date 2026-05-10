@@ -402,6 +402,25 @@
               "include": "#validate-embedded"
             }
           ]
+        },
+        {
+          "begin": "^\\s*(assert)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s*=\\s*`",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.middleware.webpipe"
+            },
+            "2": {
+              "name": "variable.other.assignment.webpipe"
+            }
+          },
+          "end": "`",
+          "name": "meta.variable-assignment.assert.webpipe",
+          "contentName": "source.validate.webpipe",
+          "patterns": [
+            {
+              "include": "#validate-embedded"
+            }
+          ]
         }
       ]
     },
@@ -583,6 +602,24 @@
             { "begin": "\\[", "end": "\\]", "patterns": [ { "include": "#jq-embedded" } ] },
             { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
             { "begin": "`", "end": "`", "name": "meta.embedded.validate.webpipe", "contentName": "source.validate.webpipe", "patterns": [ { "include": "#validate-embedded" } ] },
+            { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
+            { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
+            { "include": "#tags" },
+            { "include": "#comments" }
+          ]
+        },
+        {
+          "begin": "\\s*(\\|>)\\s*(assert)",
+          "beginCaptures": {
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.assert.webpipe" }
+          },
+          "end": "(?=$|\\s*\\|>|\\s*@)",
+          "patterns": [
+            { "begin": "\\(", "end": "\\)", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\\[", "end": "\\]", "patterns": [ { "include": "#jq-embedded" } ] },
+            { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
+            { "begin": "`", "end": "`", "name": "meta.embedded.assert.webpipe", "contentName": "source.validate.webpipe", "patterns": [ { "include": "#validate-embedded" } ] },
             { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
             { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
             { "include": "#tags" },

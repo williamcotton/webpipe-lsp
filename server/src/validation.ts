@@ -7,6 +7,7 @@ import { SymbolResolver } from './symbol-resolver';
 import { Describe, Variable, NamedPipeline, PipelineStep, Program } from 'webpipe-js';
 import { findTestContextAtOffset, extractHandlebarsVariables, extractJqVariables, escapeRegex } from './test-variable-utils';
 import { getPipelineReferenceFromStep, walkPipelineSteps } from './ast-utils';
+import { checkProgramTypes } from './type-checker';
 
 interface DiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
@@ -86,6 +87,9 @@ export class DocumentValidator {
 
       // Unified AST-based step validation (includes auth flows, result blocks, variable/pipeline refs, unknown steps)
       this.validatePipelineSteps(mergedProgram, variablesByType, pipelineNames, push, doc);
+
+      // Pipeline shape checking: route inputs, middleware envelopes, assert contracts, jq filters, result, async/join.
+      checkProgramTypes(mergedProgram, push);
 
       // Unified AST-based BDD validation (replaces regex-based when clause validation)
       this.validateBDDReferences(program, variablesByType, pipelineNames, routePatterns, push, doc);

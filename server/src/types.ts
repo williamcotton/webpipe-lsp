@@ -114,6 +114,7 @@ export interface FileMetadata {
   program: any; // Parsed AST (Program from webpipe-js)
   diagnostics: any[]; // Parse diagnostics
   symbols: SymbolTable; // Symbol table
+  typeCheck?: ProgramTypeInfo; // Inferred pipeline shapes for diagnostics, hovers, and future CLI output
   timestamp: number; // Last update timestamp for LRU cache
 
   // Multi-file extensions
@@ -121,6 +122,12 @@ export interface FileMetadata {
   exportedSymbols: ExportedSymbols; // Symbols exported by this file
   dependents: Set<string>; // URIs of files that import this file
   isOpen: boolean; // Whether file is open in VS Code
+}
+
+export interface ProgramTypeInfo {
+  routes: Map<string, unknown>;
+  pipelines: Map<string, unknown>;
+  steps: Map<string, unknown>;
 }
 
 /**

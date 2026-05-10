@@ -107,6 +107,23 @@ export const middlewareDocs: Record<string, MiddlewareDoc> = {
     ]
   },
 
+  assert: {
+    name: 'assert',
+    description: 'Validates and refines the current pipeline value against a shape contract.',
+    behavior: [
+      'Passes the value through unchanged when the contract matches',
+      'Refines downstream pipeline type information for jq and templates',
+      'Can reference named contracts declared with `assert Name = `...``'
+    ],
+    errors: [
+      '`{ type: "validationError", field, message, rule: "assert" }`'
+    ],
+    examples: [
+      'assert TeamsPageState = `{\n  data: {\n    rows: [{ id: string, name: string }],\n    rowCount: number\n  }\n}`\n\nGET /teams\n  |> pg: `SELECT * FROM teams`\n  |> assert: TeamsPageState\n  |> jq: `{ names: .data.rows | map(.name) }`',
+      'GET /lua/:id/example\n  |> lua: `return { message = "Hello", id = request.params.id }`\n  |> assert: `{ message: string, id: string | number }`\n  |> jq: `{ label: .message + " " + (.id | tostring) }`'
+    ]
+  },
+
   jq: {
     name: 'jq',
     description: 'Transform JSON using jq expressions.',
