@@ -10,6 +10,8 @@ import type {
   Variable
 } from 'webpipe-js';
 import * as jqtypeModule from 'jqtype';
+import * as handlebarsParser from '@handlebars/parser';
+import type { AST as HandlebarsAst } from '@handlebars/parser';
 
 export interface TypeDiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
@@ -102,6 +104,17 @@ interface HandlebarsTemplateSource {
 interface HandlebarsCheckState {
   partialStack: Set<string>;
   emitted: Set<string>;
+}
+
+interface HandlebarsScope {
+  current: StageShape;
+  root: StageShape;
+  blockParams: Map<string, StageShape>;
+}
+
+interface HandlebarsTemplateAnalysis {
+  source: HandlebarsTemplateSource;
+  lineStarts: number[];
 }
 
 interface JqPathDiagnostic {
@@ -316,7 +329,7 @@ function checkRegularStep(step: Extract<PipelineStep, { kind: 'Regular' }>, inpu
     return input;
   }
 
-  checkStepArgDebtAccesses(step, input, ctx);
+  checkStepArgAccesses(step, input, ctx);
 
   switch (step.name) {
     case 'jq':
@@ -463,7 +476,7 @@ function pushJqtypeDiagnostics(report: any, filter: JqFilterSource, ctx: TypeCon
   return missingProperties;
 }
 
-function pushPipelinePathDiagnostics(pathDiagnostics: JqPathDiagnostic[], jqtypeMissingProperties: Set<string>, input: StageShape, ctx: TypeContext): void {
+function pushPipelinePathDiagnostics(pathDiagnostics: JqPathDiagnostic[], jqtypeMissingProperties: Set<string>, input: StageShape, ctx: TypeContext, stageLabel = 'this jq stage'): void {
   for (const diagnostic of pathDiagnostics) {
     if (diagnostic.missingField && jqtypeMissingProperties.has(diagnostic.missingField)) {
       continue;
@@ -472,7 +485,7 @@ function pushPipelinePathDiagnostics(pathDiagnostics: JqPathDiagnostic[], jqtype
       DiagnosticSeverity.Error,
       diagnostic.start,
       diagnostic.end,
-      `Type error: ${pathToJq(diagnostic.path)} may be missing before this jq stage. Previous stage output: ${renderShape(input)}.${hintForMissingPath(diagnostic.path)}`
+      `Type error: ${pathToJq(diagnostic.path)} may be missing before ${stageLabel}. Previous stage output: ${renderShape(input)}.${hintForMissingPath(diagnostic.path)}`
     );
   }
 }
@@ -619,171 +632,223 @@ function resolveHandlebarsTemplateSource(step: Extract<PipelineStep, { kind: 'Re
 }
 
 function checkHandlebarsTemplate(source: HandlebarsTemplateSource, input: StageShape, ctx: TypeContext, state: HandlebarsCheckState): void {
-  const frames: StageShape[] = [input];
-  const blocks: Array<{ pushedContext: boolean }> = [];
+  let program: HandlebarsAst.Program;
+  try {
+    program = handlebarsParser.parse(source.source);
+  } catch {
+    return;
+  }
 
-  for (const tag of scanHandlebarsTags(source.source)) {
-    const tokens = tokenizeHandlebarsExpression(tag.content);
-    if (tokens.length === 0) continue;
+  const analysis = {
+    source,
+    lineStarts: lineStartsFor(source.source)
+  };
+  checkHandlebarsProgram(
+    program,
+    analysis,
+    {
+      current: input,
+      root: input,
+      blockParams: new Map()
+    },
+    ctx,
+    state
+  );
+}
 
-    const first = normalizeHandlebarsToken(tokens[0].text);
-    if (!first || first === 'else') {
-      continue;
-    }
-
-    if (first.startsWith('!') || first.startsWith('$')) {
-      continue;
-    }
-
-    if (first === '#*inline') {
-      blocks.push({ pushedContext: false });
-      continue;
-    }
-
-    if (first.startsWith('/')) {
-      const block = blocks.pop();
-      if (block?.pushedContext && frames.length > 1) {
-        frames.pop();
-      }
-      continue;
-    }
-
-    if (first === '>' || first === '#>' || first.startsWith('>') || first.startsWith('#>')) {
-      checkHandlebarsPartialTag(source, tag, tokens, frames[frames.length - 1], ctx, state);
-      if (first === '#>' || first.startsWith('#>')) {
-        blocks.push({ pushedContext: false });
-      }
-      continue;
-    }
-
-    if (first.startsWith('<')) {
-      blocks.push({ pushedContext: false });
-      continue;
-    }
-
-    if (first.startsWith('#')) {
-      const blockName = first.slice(1);
-      const pushedContext = checkHandlebarsBlock(source, tag, blockName, tokens, frames, input, ctx, state);
-      blocks.push({ pushedContext });
-      continue;
-    }
-
-    checkHandlebarsValueTag(source, tag, tokens, frames[frames.length - 1], input, ctx, state);
+function checkHandlebarsProgram(program: HandlebarsAst.Program, analysis: HandlebarsTemplateAnalysis, scope: HandlebarsScope, ctx: TypeContext, state: HandlebarsCheckState): void {
+  for (const statement of program.body || []) {
+    checkHandlebarsStatement(statement, analysis, scope, ctx, state);
   }
 }
 
-function checkHandlebarsBlock(
-  source: HandlebarsTemplateSource,
-  tag: { contentStart: number; content: string },
-  blockName: string,
-  tokens: Array<{ text: string; start: number; end: number }>,
-  frames: StageShape[],
-  rootInput: StageShape,
-  ctx: TypeContext,
-  state: HandlebarsCheckState
-): boolean {
-  const current = frames[frames.length - 1];
+function checkHandlebarsStatement(statement: HandlebarsAst.Statement, analysis: HandlebarsTemplateAnalysis, scope: HandlebarsScope, ctx: TypeContext, state: HandlebarsCheckState): void {
+  switch (statement.type) {
+    case 'ContentStatement':
+    case 'CommentStatement':
+      return;
+    case 'MustacheStatement':
+    case 'Decorator':
+      checkHandlebarsMustache(statement as HandlebarsAst.MustacheStatement, analysis, scope, ctx, state);
+      return;
+    case 'BlockStatement':
+    case 'DecoratorBlock':
+      checkHandlebarsBlockStatement(statement as HandlebarsAst.BlockStatement, analysis, scope, ctx, state);
+      return;
+    case 'PartialStatement':
+      checkHandlebarsPartialStatement(statement as HandlebarsAst.PartialStatement, analysis, scope, ctx, state);
+      return;
+    case 'PartialBlockStatement': {
+      const partial = statement as HandlebarsAst.PartialBlockStatement;
+      checkHandlebarsPartialStatement(partial, analysis, scope, ctx, state);
+      checkHandlebarsProgram(partial.program, analysis, scope, ctx, state);
+      return;
+    }
+  }
+}
+
+function checkHandlebarsMustache(node: HandlebarsAst.MustacheStatement, analysis: HandlebarsTemplateAnalysis, scope: HandlebarsScope, ctx: TypeContext, state: HandlebarsCheckState): void {
+  const hasHelperArgs = (node.params?.length || 0) > 0 || (node.hash?.pairs?.length || 0) > 0;
+  if (!hasHelperArgs && isHandlebarsPathExpression(node.path)) {
+    checkHandlebarsPathExpression(node.path, analysis, scope, ctx, state);
+    return;
+  }
+
+  if (isHandlebarsSubExpression(node.path)) {
+    checkHandlebarsSubExpression(node.path, analysis, scope, ctx, state);
+  }
+  checkHandlebarsExpressions(node.params || [], node.hash, analysis, scope, ctx, state);
+}
+
+function checkHandlebarsBlockStatement(node: HandlebarsAst.BlockStatement, analysis: HandlebarsTemplateAnalysis, scope: HandlebarsScope, ctx: TypeContext, state: HandlebarsCheckState): void {
+  const blockName = handlebarsPathName(node.path);
+
+  if (statementIsDecoratorBlock(node) && blockName === 'inline') {
+    checkHandlebarsExpressions(node.params || [], node.hash, analysis, scope, ctx, state);
+    checkHandlebarsProgram(node.program, analysis, scope, ctx, state);
+    return;
+  }
 
   if (blockName === 'each') {
-    const pathToken = firstPathToken(tokens.slice(1));
-    if (!pathToken) return false;
-    const path = parseHandlebarsPath(pathToken.text);
-    if (!path) return false;
-    pushHandlebarsPathDiagnostic(source, tag, pathToken, path, current, rootInput, ctx, state);
-    const shape = shapeAtPath(current, path);
-    frames.push(eachItemShape(shape));
-    return true;
+    const itemShape = checkHandlebarsBlockContext(node, analysis, scope, ctx, state, eachItemShape);
+    const childScope = withHandlebarsBlockParams({ ...scope, current: itemShape }, node.program, itemShape, numberShape);
+    checkHandlebarsProgram(node.program, analysis, childScope, ctx, state);
+    if (node.inverse) {
+      checkHandlebarsProgram(node.inverse, analysis, scope, ctx, state);
+    }
+    return;
   }
 
   if (blockName === 'with') {
-    const pathToken = firstPathToken(tokens.slice(1));
-    if (!pathToken) return false;
-    const path = parseHandlebarsPath(pathToken.text);
-    if (!path) return false;
-    pushHandlebarsPathDiagnostic(source, tag, pathToken, path, current, rootInput, ctx, state);
-    frames.push(shapeAtPath(current, path) ?? unknownShape);
-    return true;
-  }
-
-  const args = blockName === 'if' || blockName === 'unless'
-    ? tokens.slice(1)
-    : tokens;
-  for (const token of pathTokensFromHelperArgs(args)) {
-    const path = parseHandlebarsPath(token.text);
-    if (path) {
-      pushHandlebarsPathDiagnostic(source, tag, token, path, current, rootInput, ctx, state);
+    const childShape = checkHandlebarsBlockContext(node, analysis, scope, ctx, state, shape => shape ?? unknownShape);
+    const childScope = withHandlebarsBlockParams({ ...scope, current: childShape }, node.program, childShape);
+    checkHandlebarsProgram(node.program, analysis, childScope, ctx, state);
+    if (node.inverse) {
+      checkHandlebarsProgram(node.inverse, analysis, scope, ctx, state);
     }
-  }
-  return false;
-}
-
-function checkHandlebarsValueTag(
-  source: HandlebarsTemplateSource,
-  tag: { contentStart: number; content: string },
-  tokens: Array<{ text: string; start: number; end: number }>,
-  currentInput: StageShape,
-  rootInput: StageShape,
-  ctx: TypeContext,
-  state: HandlebarsCheckState
-): void {
-  const first = normalizeHandlebarsToken(tokens[0].text);
-  const pathTokens = tokens.length === 1 && first !== 'else'
-    ? tokens
-    : pathTokensFromHelperArgs(tokens.slice(1));
-
-  for (const token of pathTokens) {
-    const path = parseHandlebarsPath(token.text);
-    if (path) {
-      pushHandlebarsPathDiagnostic(source, tag, token, path, currentInput, rootInput, ctx, state);
-    }
-  }
-}
-
-function checkHandlebarsPartialTag(
-  source: HandlebarsTemplateSource,
-  tag: { contentStart: number; content: string },
-  tokens: Array<{ text: string; start: number; end: number }>,
-  currentInput: StageShape,
-  ctx: TypeContext,
-  state: HandlebarsCheckState
-): void {
-  const partialToken = partialNameToken(tokens);
-  if (!partialToken || partialToken.text === '@partial-block') return;
-
-  const first = normalizeHandlebarsToken(tokens[0].text);
-  const contextStartIndex = first === '>' || first === '#>' ? 2 : 1;
-  const contextToken = firstPathToken(tokens.slice(contextStartIndex));
-  let partialInput = currentInput;
-  if (contextToken) {
-    const contextPath = parseHandlebarsPath(contextToken.text);
-    if (contextPath) {
-      pushHandlebarsPathDiagnostic(source, tag, contextToken, contextPath, currentInput, currentInput, ctx, state);
-      partialInput = shapeAtPath(currentInput, contextPath) ?? unknownShape;
-    }
-  }
-
-  if (state.partialStack.has(partialToken.text)) {
     return;
   }
-  const partial = findHandlebarsVariable(ctx, partialToken.text);
+
+  if (blockName === 'if' || blockName === 'unless') {
+    checkHandlebarsExpressions(node.params || [], node.hash, analysis, scope, ctx, state);
+    checkHandlebarsProgram(node.program, analysis, scope, ctx, state);
+    if (node.inverse) {
+      checkHandlebarsProgram(node.inverse, analysis, scope, ctx, state);
+    }
+    return;
+  }
+
+  const hasHelperArgs = (node.params?.length || 0) > 0 || (node.hash?.pairs?.length || 0) > 0;
+  if (hasHelperArgs) {
+    checkHandlebarsExpressions(node.params || [], node.hash, analysis, scope, ctx, state);
+    checkHandlebarsProgram(node.program, analysis, scope, ctx, state);
+  } else {
+    checkHandlebarsPathExpression(node.path, analysis, scope, ctx, state);
+    const childShape = shapeAtHandlebarsPath(node.path, scope) ?? unknownShape;
+    checkHandlebarsProgram(node.program, analysis, { ...scope, current: childShape }, ctx, state);
+  }
+  if (node.inverse) {
+    checkHandlebarsProgram(node.inverse, analysis, scope, ctx, state);
+  }
+}
+
+function checkHandlebarsBlockContext(
+  node: HandlebarsAst.BlockStatement,
+  analysis: HandlebarsTemplateAnalysis,
+  scope: HandlebarsScope,
+  ctx: TypeContext,
+  state: HandlebarsCheckState,
+  mapShape: (shape: StageShape | undefined) => StageShape
+): StageShape {
+  const param = node.params?.[0];
+  if (!param) {
+    return unknownShape;
+  }
+  checkHandlebarsExpression(param, analysis, scope, ctx, state);
+  return mapShape(expressionShape(param, scope));
+}
+
+function checkHandlebarsPartialStatement(node: HandlebarsAst.PartialStatement | HandlebarsAst.PartialBlockStatement, analysis: HandlebarsTemplateAnalysis, scope: HandlebarsScope, ctx: TypeContext, state: HandlebarsCheckState): void {
+  const partialName = handlebarsPartialName(node.name);
+  if (!partialName || partialName === '@partial-block') {
+    checkHandlebarsExpressions(node.params || [], node.hash, analysis, scope, ctx, state);
+    return;
+  }
+
+  let partialInput = scope.current;
+  const contextParam = node.params?.[0];
+  if (contextParam) {
+    checkHandlebarsExpression(contextParam, analysis, scope, ctx, state);
+    partialInput = expressionShape(contextParam, scope) ?? unknownShape;
+  }
+
+  checkHandlebarsExpressions((node.params || []).slice(1), node.hash, analysis, scope, ctx, state);
+  partialInput = mergeHandlebarsHashIntoShape(partialInput, node.hash, scope);
+
+  if (state.partialStack.has(partialName)) {
+    return;
+  }
+  const partial = findHandlebarsVariable(ctx, partialName);
   if (!partial) {
     return;
   }
 
-  state.partialStack.add(partialToken.text);
+  const nameRange = handlebarsNodeRange(analysis, node.name);
+  state.partialStack.add(partialName);
   checkHandlebarsTemplate(
     {
       source: partial.value,
-      diagnosticStart: source.preciseSpans ? source.diagnosticStart + tag.contentStart + partialToken.start : source.diagnosticStart,
-      diagnosticEnd: source.preciseSpans ? source.diagnosticStart + tag.contentStart + partialToken.end : source.diagnosticEnd,
+      diagnosticStart: nameRange.start,
+      diagnosticEnd: nameRange.end,
       preciseSpans: false,
-      label: `Handlebars partial '${partialToken.text}' used here`
+      label: `Handlebars partial '${partialName}' used here`
     },
     partialInput,
     ctx,
     state
   );
-  state.partialStack.delete(partialToken.text);
+  state.partialStack.delete(partialName);
+}
+
+function checkHandlebarsExpressions(expressions: HandlebarsAst.Expression[], hash: HandlebarsAst.Hash | undefined, analysis: HandlebarsTemplateAnalysis, scope: HandlebarsScope, ctx: TypeContext, state: HandlebarsCheckState): void {
+  for (const expression of expressions) {
+    checkHandlebarsExpression(expression, analysis, scope, ctx, state);
+  }
+  for (const pair of hash?.pairs || []) {
+    checkHandlebarsExpression(pair.value, analysis, scope, ctx, state);
+  }
+}
+
+function checkHandlebarsExpression(expression: HandlebarsAst.Expression, analysis: HandlebarsTemplateAnalysis, scope: HandlebarsScope, ctx: TypeContext, state: HandlebarsCheckState): void {
+  if (isHandlebarsPathExpression(expression)) {
+    checkHandlebarsPathExpression(expression, analysis, scope, ctx, state);
+  } else if (isHandlebarsSubExpression(expression)) {
+    checkHandlebarsSubExpression(expression, analysis, scope, ctx, state);
+  }
+}
+
+function checkHandlebarsSubExpression(expression: HandlebarsAst.SubExpression, analysis: HandlebarsTemplateAnalysis, scope: HandlebarsScope, ctx: TypeContext, state: HandlebarsCheckState): void {
+  if (isHandlebarsSubExpression(expression.path)) {
+    checkHandlebarsSubExpression(expression.path, analysis, scope, ctx, state);
+  }
+  checkHandlebarsExpressions(expression.params || [], expression.hash, analysis, scope, ctx, state);
+}
+
+function checkHandlebarsPathExpression(path: HandlebarsAst.PathExpression, analysis: HandlebarsTemplateAnalysis, scope: HandlebarsScope, ctx: TypeContext, state: HandlebarsCheckState): void {
+  const resolved = resolveHandlebarsPath(path, scope);
+  if (!resolved || resolved.path.length === 0) return;
+  pushHandlebarsPathDiagnostic(analysis, path, resolved.path, resolved.base, scope.root, ctx, state, path.original || pathToHandlebars(resolved.path));
+}
+
+function withHandlebarsBlockParams(scope: HandlebarsScope, program: HandlebarsAst.Program, firstShape: StageShape, secondShape?: StageShape): HandlebarsScope {
+  const blockParams = [...scope.blockParams];
+  const names = program.blockParams || [];
+  if (names[0]) blockParams.push([names[0], firstShape]);
+  if (names[1] && secondShape) blockParams.push([names[1], secondShape]);
+  return {
+    ...scope,
+    blockParams: new Map(blockParams)
+  };
 }
 
 function handlebarsRenderInputShape(input: StageShape): StageShape {
@@ -865,13 +930,6 @@ function applyPipelineArgs(step: Extract<PipelineStep, { kind: 'Regular' }>, inp
   if (!step.args.length) {
     return input;
   }
-
-  checkJqSourceDebtAccesses(step.args[0], input, ctx, {
-    source: step.args[0],
-    diagnosticStart: step.nameStart,
-    diagnosticEnd: step.nameEnd,
-    preciseSpans: false
-  });
 
   const argShape = inferJqOutputShape(step.args[0], input.shape);
   if (input.shape.kind === 'object' && argShape.kind === 'object') {
@@ -1322,19 +1380,35 @@ function transformUnknownState(input: PipelineTypeState, step: Extract<PipelineS
   };
 }
 
-function checkStepArgDebtAccesses(step: Extract<PipelineStep, { kind: 'Regular' }>, input: PipelineTypeState, ctx: TypeContext): void {
-  for (const arg of step.args || []) {
-    checkJqSourceDebtAccesses(arg, input, ctx, {
+function checkStepArgAccesses(step: Extract<PipelineStep, { kind: 'Regular' }>, input: PipelineTypeState, ctx: TypeContext): void {
+  const argSpans = step.argSpans;
+  for (let index = 0; index < (step.args || []).length; index++) {
+    const arg = step.args[index];
+    const span = argSpans?.[index];
+    checkJqSourceAccesses(arg, input, ctx, {
       source: arg,
-      diagnosticStart: step.nameStart,
-      diagnosticEnd: step.nameEnd,
-      preciseSpans: false
-    });
+      diagnosticStart: span?.start ?? step.nameStart,
+      diagnosticEnd: span?.end ?? step.nameEnd,
+      preciseSpans: !!span
+    }, `${step.name} arguments`);
   }
 }
 
-function checkJqSourceDebtAccesses(source: string, input: PipelineTypeState, ctx: TypeContext, span: JqFilterSource): void {
+function checkJqSourceAccesses(source: string, input: PipelineTypeState, ctx: TypeContext, span: JqFilterSource, stageLabel: string): void {
   const accesses = scanRootFieldAccesses(source, 1);
+  const pathDiagnostics: JqPathDiagnostic[] = [];
+  for (const access of accesses) {
+    const problem = validatePath(input.shape, access.path);
+    if (problem) {
+      pathDiagnostics.push({
+        path: access.path,
+        missingField: missingFieldFromProblem(problem),
+        start: span.preciseSpans ? span.diagnosticStart + access.start : span.diagnosticStart,
+        end: span.preciseSpans ? span.diagnosticStart + access.end : span.diagnosticEnd
+      });
+    }
+  }
+  pushPipelinePathDiagnostics(pathDiagnostics, new Set(), input.shape, ctx, stageLabel);
   pushStrictDebtAccessDiagnostics(accesses, input, ctx, span);
 }
 
@@ -1443,183 +1517,139 @@ function renderDebtPath(path: PathSegment[]): string {
   return out;
 }
 
-function scanHandlebarsTags(source: string): Array<{ content: string; contentStart: number; start: number; end: number }> {
-  const tags: Array<{ content: string; contentStart: number; start: number; end: number }> = [];
-  let index = 0;
-
-  while (index < source.length) {
-    const open = source.indexOf('{{', index);
-    if (open === -1) break;
-
-    const triple = source[open + 2] === '{';
-    const contentStart = open + (triple ? 3 : 2);
-    const closeNeedle = triple ? '}}}' : '}}';
-    const close = source.indexOf(closeNeedle, contentStart);
-    if (close === -1) break;
-
-    tags.push({
-      content: source.slice(contentStart, close),
-      contentStart,
-      start: open,
-      end: close + closeNeedle.length
-    });
-    index = close + closeNeedle.length;
-  }
-
-  return tags;
-}
-
-function tokenizeHandlebarsExpression(content: string): Array<{ text: string; start: number; end: number }> {
-  const tokens: Array<{ text: string; start: number; end: number }> = [];
-  let index = 0;
-
-  while (index < content.length) {
-    while (index < content.length && /\s/.test(content[index])) index++;
-    if (index >= content.length) break;
-
-    const start = index;
-    const quote = content[index] === '"' || content[index] === "'" ? content[index] : undefined;
-    if (quote) {
-      index++;
-      let escaped = false;
-      while (index < content.length) {
-        const ch = content[index++];
-        if (escaped) {
-          escaped = false;
-        } else if (ch === '\\') {
-          escaped = true;
-        } else if (ch === quote) {
-          break;
-        }
-      }
-      tokens.push({ text: content.slice(start, index), start, end: index });
-      continue;
-    }
-
-    while (index < content.length && !/\s/.test(content[index])) index++;
-    tokens.push({ text: content.slice(start, index), start, end: index });
-  }
-
-  return tokens;
-}
-
-function normalizeHandlebarsToken(token: string): string {
-  return token.replace(/^~+/, '').replace(/~+$/, '').trim();
-}
-
-function partialNameToken(tokens: Array<{ text: string; start: number; end: number }>): { text: string; start: number; end: number } | undefined {
-  if (tokens.length === 0) return undefined;
-  const first = normalizeHandlebarsToken(tokens[0].text);
-  if (first === '>' || first === '#>') {
-    return normalizeTokenEntry(tokens[1]);
-  }
-  if (first.startsWith('>') || first.startsWith('#>')) {
-    const prefixLength = first.startsWith('#>') ? 2 : 1;
-    const token = tokens[0];
-    return {
-      text: first.slice(prefixLength),
-      start: token.start + token.text.indexOf(first) + prefixLength,
-      end: token.end
-    };
-  }
-  return undefined;
-}
-
-function normalizeTokenEntry(token: { text: string; start: number; end: number } | undefined): { text: string; start: number; end: number } | undefined {
-  if (!token) return undefined;
-  const normalized = normalizeHandlebarsToken(token.text);
-  if (!normalized) return undefined;
-  const offset = token.text.indexOf(normalized);
-  return {
-    text: normalized,
-    start: token.start + Math.max(0, offset),
-    end: token.start + Math.max(0, offset) + normalized.length
-  };
-}
-
-function firstPathToken(tokens: Array<{ text: string; start: number; end: number }>): { text: string; start: number; end: number } | undefined {
-  return pathTokensFromHelperArgs(tokens)[0];
-}
-
-function pathTokensFromHelperArgs(tokens: Array<{ text: string; start: number; end: number }>): Array<{ text: string; start: number; end: number }> {
-  const result: Array<{ text: string; start: number; end: number }> = [];
-
-  for (const token of tokens) {
-    const normalized = normalizeTokenEntry(token);
-    if (!normalized) continue;
-    if (normalized.text.includes('=')) {
-      const [, value] = normalized.text.split(/=(.*)/s);
-      if (value) {
-        const valueStart = normalized.text.indexOf(value);
-        const valueToken = {
-          text: value,
-          start: normalized.start + valueStart,
-          end: normalized.start + valueStart + value.length
-        };
-        if (parseHandlebarsPath(valueToken.text)) {
-          result.push(valueToken);
-        }
-      }
-      continue;
-    }
-    if (parseHandlebarsPath(normalized.text)) {
-      result.push(normalized);
-    }
-  }
-
-  return result;
-}
-
-function parseHandlebarsPath(token: string): PathSegment[] | undefined {
-  let normalized = normalizeHandlebarsToken(token).replace(/^&/, '');
-  if (!normalized || normalized === '.' || normalized === 'this') return [];
-  if (normalized.startsWith('@') || normalized.startsWith('$')) return undefined;
-  if (normalized.startsWith('"') || normalized.startsWith("'")) return undefined;
-  if (/^-?\d+(\.\d+)?$/.test(normalized)) return undefined;
-  if (['true', 'false', 'null', 'undefined'].includes(normalized)) return undefined;
-  if (normalized.includes('(') || normalized.includes(')')) return undefined;
-  if (normalized.startsWith('../')) return undefined;
-  if (normalized.startsWith('./')) normalized = normalized.slice(2);
-  if (normalized.startsWith('this.')) normalized = normalized.slice('this.'.length);
-  if (normalized.startsWith('.')) normalized = normalized.slice(1);
-  if (!normalized) return [];
-
-  const parts = normalized.split(/[./]/).filter(Boolean);
-  if (parts.length === 0 || parts.some(part => !/^[A-Za-z_][\w-]*$/.test(part))) {
-    return undefined;
-  }
-  return parts.map(fieldSegment);
-}
-
 function pushHandlebarsPathDiagnostic(
-  source: HandlebarsTemplateSource,
-  tag: { contentStart: number; content: string },
-  token: { text: string; start: number; end: number },
+  analysis: HandlebarsTemplateAnalysis,
+  node: HandlebarsAst.Node,
   path: PathSegment[],
   currentInput: StageShape,
   rootInput: StageShape,
   ctx: TypeContext,
-  state: HandlebarsCheckState
+  state: HandlebarsCheckState,
+  displayPath: string
 ): void {
   if (path.length === 0) return;
   const problem = validateHandlebarsPath(currentInput, path);
   if (!problem) return;
 
-  const start = source.preciseSpans
-    ? source.diagnosticStart + tag.contentStart + token.start
-    : source.diagnosticStart;
-  const end = source.preciseSpans
-    ? source.diagnosticStart + tag.contentStart + token.end
-    : source.diagnosticEnd;
-  const key = `${start}:${end}:${pathToHandlebars(path)}:${problem}:${source.label || ''}`;
+  const { start, end } = handlebarsNodeRange(analysis, node);
+  const key = `${start}:${end}:${displayPath}:${problem}:${analysis.source.label || ''}`;
   if (state.emitted.has(key)) return;
   state.emitted.add(key);
 
-  const detail = handlebarsProblemMessage(problem, path, rootInput);
-  const message = source.label
-    ? `${source.label} has type error: ${detail}`
+  const detail = handlebarsProblemMessage(problem, displayPath, rootInput);
+  const message = analysis.source.label
+    ? `${analysis.source.label} has type error: ${detail}`
     : `Handlebars type check: ${detail}`;
   ctx.push(DiagnosticSeverity.Error, start, end, message);
+}
+
+function resolveHandlebarsPath(path: HandlebarsAst.PathExpression, scope: HandlebarsScope): { base: StageShape; path: PathSegment[] } | undefined {
+  if (path.data || path.depth > 0) return undefined;
+  const parts = handlebarsPathParts(path);
+  if (!parts) return undefined;
+  if (parts.length === 0) return { base: scope.current, path: [] };
+
+  const blockParamShape = scope.blockParams.get(parts[0]);
+  if (blockParamShape) {
+    return {
+      base: blockParamShape,
+      path: parts.slice(1).map(fieldSegment)
+    };
+  }
+
+  return {
+    base: scope.current,
+    path: parts.map(fieldSegment)
+  };
+}
+
+function shapeAtHandlebarsPath(path: HandlebarsAst.PathExpression, scope: HandlebarsScope): StageShape | undefined {
+  const resolved = resolveHandlebarsPath(path, scope);
+  return resolved ? shapeAtPath(resolved.base, resolved.path) : undefined;
+}
+
+function expressionShape(expression: HandlebarsAst.Expression, scope: HandlebarsScope): StageShape | undefined {
+  if (isHandlebarsPathExpression(expression)) {
+    return shapeAtHandlebarsPath(expression, scope);
+  }
+  switch (expression.type) {
+    case 'StringLiteral':
+      return { kind: 'string', literal: (expression as HandlebarsAst.StringLiteral).value };
+    case 'NumberLiteral':
+      return { kind: 'number', literal: (expression as HandlebarsAst.NumberLiteral).value };
+    case 'BooleanLiteral':
+      return { kind: 'boolean', literal: (expression as HandlebarsAst.BooleanLiteral).value };
+    case 'NullLiteral':
+      return nullShape;
+    case 'UndefinedLiteral':
+      return unknownShape;
+    default:
+      return unknownShape;
+  }
+}
+
+function mergeHandlebarsHashIntoShape(shape: StageShape, hash: HandlebarsAst.Hash | undefined, scope: HandlebarsScope): StageShape {
+  const pairs = hash?.pairs || [];
+  if (pairs.length === 0) return shape;
+
+  const fields: Record<string, ShapeField> = {};
+  for (const pair of pairs) {
+    fields[pair.key] = { shape: expressionShape(pair.value, scope) ?? unknownShape };
+  }
+  return mergeObjectShapes(shape, objectShape(fields));
+}
+
+function handlebarsPathParts(path: HandlebarsAst.PathExpression): string[] | undefined {
+  if ((path as any).this || path.original === 'this' || path.original === '.') return [];
+  const parts = path.parts || [];
+  if (parts.some(part => typeof part !== 'string')) return undefined;
+  return parts as string[];
+}
+
+function handlebarsPathName(path: HandlebarsAst.PathExpression): string | undefined {
+  const parts = handlebarsPathParts(path);
+  return parts?.[0];
+}
+
+function handlebarsPartialName(name: HandlebarsAst.PathExpression | HandlebarsAst.SubExpression): string | undefined {
+  if (!isHandlebarsPathExpression(name) || name.data || name.depth > 0) return undefined;
+  return name.original || handlebarsPathParts(name)?.join('/');
+}
+
+function isHandlebarsPathExpression(node: HandlebarsAst.Expression | HandlebarsAst.SubExpression | HandlebarsAst.PathExpression | HandlebarsAst.Literal): node is HandlebarsAst.PathExpression {
+  return node?.type === 'PathExpression';
+}
+
+function isHandlebarsSubExpression(node: HandlebarsAst.Expression | HandlebarsAst.SubExpression | HandlebarsAst.PathExpression | HandlebarsAst.Literal): node is HandlebarsAst.SubExpression {
+  return node?.type === 'SubExpression';
+}
+
+function statementIsDecoratorBlock(node: HandlebarsAst.BlockStatement): boolean {
+  return (node as any).type === 'DecoratorBlock';
+}
+
+function lineStartsFor(source: string): number[] {
+  const starts = [0];
+  for (let index = 0; index < source.length; index++) {
+    if (source[index] === '\n') {
+      starts.push(index + 1);
+    }
+  }
+  return starts;
+}
+
+function handlebarsNodeRange(analysis: HandlebarsTemplateAnalysis, node: HandlebarsAst.Node): { start: number; end: number } {
+  if (!analysis.source.preciseSpans || !node.loc) {
+    return { start: analysis.source.diagnosticStart, end: analysis.source.diagnosticEnd };
+  }
+  return {
+    start: analysis.source.diagnosticStart + handlebarsPositionOffset(analysis.lineStarts, node.loc.start),
+    end: analysis.source.diagnosticStart + handlebarsPositionOffset(analysis.lineStarts, node.loc.end)
+  };
+}
+
+function handlebarsPositionOffset(lineStarts: number[], position: HandlebarsAst.Position): number {
+  return (lineStarts[Math.max(0, position.line - 1)] ?? 0) + position.column;
 }
 
 function validateHandlebarsPath(shape: StageShape, path: PathSegment[]): string | undefined {
@@ -1630,12 +1660,12 @@ function validateHandlebarsPath(shape: StageShape, path: PathSegment[]): string 
   return validatePath(shape, path);
 }
 
-function handlebarsProblemMessage(problem: string, path: PathSegment[], input: StageShape): string {
+function handlebarsProblemMessage(problem: string, displayPath: string, input: StageShape): string {
   const missing = missingFieldFromProblem(problem);
   if (missing) {
-    return `property "${missing}" is not present for {{${pathToHandlebars(path)}}}. Previous stage output: ${renderShape(input)}.`;
+    return `property "${missing}" is not present for {{${displayPath}}}. Previous stage output: ${renderShape(input)}.`;
   }
-  return `{{${pathToHandlebars(path)}}} is invalid: ${problem}. Previous stage output: ${renderShape(input)}.`;
+  return `{{${displayPath}}} is invalid: ${problem}. Previous stage output: ${renderShape(input)}.`;
 }
 
 function pathToHandlebars(path: PathSegment[]): string {

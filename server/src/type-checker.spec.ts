@@ -122,6 +122,42 @@ GET /pipeline-sugar/params/:id
   );
 });
 
+test('middleware arguments are checked against the current pipeline shape', () => {
+  const source = `
+GET /gql/user/:id/todos
+  |> jq: \`{ targetNumber: (.params.id | tonumber) }\`
+  |> graphql({ userId: .targetId }): \`
+    query($userId: ID!) {
+      user(id: $userId) { name email }
+    }
+  \`
+  |> jq: \`.\`
+`;
+  const diagnostic = collectTypeDiagnosticDetails(source)
+    .find(item => item.message.includes('.targetId may be missing') && item.message.includes('graphql arguments'));
+
+  assert.ok(diagnostic);
+  assert.equal(source.slice(diagnostic.start, diagnostic.end), '.targetId');
+});
+
+test('middleware arguments accept fields produced by previous stages', () => {
+  const messages = collectTypeDiagnostics(`
+GET /gql/user/:id/todos
+  |> jq: \`{ targetId: (.params.id | tonumber) }\`
+  |> graphql({ userId: .targetId }): \`
+    query($userId: ID!) {
+      user(id: $userId) { name email }
+    }
+  \`
+  |> jq: \`.\`
+`);
+
+  assert.equal(
+    messages.some(message => message.includes('.targetId may be missing')),
+    false
+  );
+});
+
 test('explicit resultName takes precedence over variable auto-naming', () => {
   const messages = collectTypeDiagnostics(`
 pg getUserInfo = \`SELECT 1 as id, 'Test User' as name\`
@@ -239,6 +275,24 @@ GET /todos
 
   assert.equal(
     messages.some(message => message.includes('Handlebars') && message.includes('title')),
+    false
+  );
+});
+
+test('handlebars parser handles block params and helper arguments', () => {
+  const messages = collectTypeDiagnostics(`
+GET /todos
+  |> jq: \`{ todos: [{ title: "Ship it", created_at: "today" }] }\`
+  |> handlebars: \`
+    {{#each todos as |todo|}}
+      {{formatDate todo.created_at}}
+      {{todo.title}}
+    {{/each}}
+  \`
+`);
+
+  assert.equal(
+    messages.some(message => message.includes('Handlebars') && (message.includes('todo') || message.includes('formatDate'))),
     false
   );
 });
