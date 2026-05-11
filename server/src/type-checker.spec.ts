@@ -200,6 +200,85 @@ GET /hello/:world
   );
 });
 
+test('handlebars diagnostics point at missing inline template properties', () => {
+  const source = `
+GET /hello/:world
+  |> jq: \`{ world: .params.world }\`
+  |> handlebars: \`<p>hello, {{wrld}}</p>\`
+`;
+  const diagnostic = collectTypeDiagnosticDetails(source)
+    .find(item => item.message.includes('Handlebars type check') && item.message.includes('wrld'));
+
+  assert.ok(diagnostic);
+  assert.equal(source.slice(diagnostic.start, diagnostic.end), 'wrld');
+});
+
+test('handlebars variable diagnostics point at the template use site', () => {
+  const source = `
+handlebars greeting = \`<p>hello, {{name}}</p>\`
+
+GET /hello
+  |> jq: \`{ world: "Ada" }\`
+  |> handlebars: greeting
+`;
+  const diagnostic = collectTypeDiagnosticDetails(source)
+    .find(item => item.message.includes("Handlebars template 'greeting' used here has type error"));
+
+  assert.ok(diagnostic);
+  assert.equal(source.slice(diagnostic.start, diagnostic.end), 'greeting');
+});
+
+test('handlebars partial diagnostics use each item context', () => {
+  const messages = collectTypeDiagnostics(`
+handlebars todoItem = \`<li>{{title}}</li>\`
+
+GET /todos
+  |> jq: \`{ todos: [{ title: "Ship it" }] }\`
+  |> handlebars: \`<ul>{{#each todos}}{{> todoItem}}{{/each}}</ul>\`
+`);
+
+  assert.equal(
+    messages.some(message => message.includes('Handlebars') && message.includes('title')),
+    false
+  );
+});
+
+test('named pipeline handlebars diagnostics stay on the definition after local shape materializes', () => {
+  const source = `
+pipeline renderGreeting =
+  |> jq: \`{ name: "Ada" }\`
+  |> handlebars: \`<p>hello, {{nam}}</p>\`
+
+GET /hello
+  |> renderGreeting
+`;
+  const diagnostics = collectTypeDiagnosticDetails(source);
+  const diagnostic = diagnostics.find(item => item.message.includes('Handlebars type check') && item.message.includes('nam'));
+
+  assert.ok(diagnostic);
+  assert.equal(
+    diagnostics.some(item => item.message.includes("Pipeline 'renderGreeting' called here") && item.message.includes('nam')),
+    false
+  );
+  assert.equal(source.slice(diagnostic.start, diagnostic.end), 'nam');
+});
+
+test('named pipeline handlebars input diagnostics point at the invalid call site', () => {
+  const source = `
+pipeline renderGreeting =
+  |> handlebars: \`<p>hello, {{name}}</p>\`
+
+GET /hello
+  |> jq: \`{ world: "Ada" }\`
+  |> renderGreeting
+`;
+  const diagnostic = collectTypeDiagnosticDetails(source)
+    .find(item => item.message.includes("Pipeline 'renderGreeting' called here has type error") && item.message.includes('name'));
+
+  assert.ok(diagnostic);
+  assert.equal(diagnostic.start, source.lastIndexOf('renderGreeting'));
+});
+
 test('strict mode flags pg rows consumed without assert', () => {
   const messages = collectTypeDiagnostics(`
 GET /teams

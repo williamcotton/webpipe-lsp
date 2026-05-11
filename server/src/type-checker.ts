@@ -91,6 +91,19 @@ interface JqFilterSource {
   preciseSpans: boolean;
 }
 
+interface HandlebarsTemplateSource {
+  source: string;
+  diagnosticStart: number;
+  diagnosticEnd: number;
+  preciseSpans: boolean;
+  label?: string;
+}
+
+interface HandlebarsCheckState {
+  partialStack: Set<string>;
+  emitted: Set<string>;
+}
+
 interface JqPathDiagnostic {
   path: PathSegment[];
   missingField?: string;
@@ -321,8 +334,7 @@ function checkRegularStep(step: Extract<PipelineStep, { kind: 'Regular' }>, inpu
     case 'auth':
       return withShape(input, applyAuthShape(input.shape, step));
     case 'handlebars':
-      pushStepDebtDiagnostics(input, step, ctx, 'handlebars renders');
-      return stateOf({ kind: 'string', contentType: 'text/html' });
+      return checkHandlebarsStep(step, input, ctx);
     case 'lua':
       return transformUnknownState(input, step, 'lua');
     case 'js':
@@ -560,6 +572,247 @@ function checkValidateStep(step: Extract<PipelineStep, { kind: 'Regular' }>, inp
     shape: object,
     debts: clearRouteBodyDebts(input.debts, parsed.shape)
   };
+}
+
+function checkHandlebarsStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: PipelineTypeState, ctx: TypeContext): PipelineTypeState {
+  pushStepDebtDiagnostics(input, step, ctx, 'handlebars renders');
+
+  const template = resolveHandlebarsTemplateSource(step, ctx);
+  if (template) {
+    checkHandlebarsTemplate(
+      template,
+      handlebarsRenderInputShape(input.shape),
+      ctx,
+      { partialStack: new Set(), emitted: new Set() }
+    );
+  }
+
+  return stateOf({ kind: 'string', contentType: 'text/html' });
+}
+
+function resolveHandlebarsTemplateSource(step: Extract<PipelineStep, { kind: 'Regular' }>, ctx: TypeContext): HandlebarsTemplateSource | undefined {
+  const configStart = step.configStart ?? step.nameStart;
+  const configEnd = step.configEnd ?? step.nameEnd;
+
+  if (step.configType !== 'identifier') {
+    const quoted = step.configType === 'backtick' || step.configType === 'quoted';
+    return {
+      source: step.config,
+      diagnosticStart: quoted ? configStart + 1 : configStart,
+      diagnosticEnd: quoted ? Math.max(configStart + 1, configEnd - 1) : configEnd,
+      preciseSpans: true
+    };
+  }
+
+  const variable = findHandlebarsVariable(ctx, step.config);
+  if (!variable) {
+    return undefined;
+  }
+
+  return {
+    source: variable.value,
+    diagnosticStart: configStart,
+    diagnosticEnd: configEnd,
+    preciseSpans: false,
+    label: `Handlebars template '${step.config.trim()}' used here`
+  };
+}
+
+function checkHandlebarsTemplate(source: HandlebarsTemplateSource, input: StageShape, ctx: TypeContext, state: HandlebarsCheckState): void {
+  const frames: StageShape[] = [input];
+  const blocks: Array<{ pushedContext: boolean }> = [];
+
+  for (const tag of scanHandlebarsTags(source.source)) {
+    const tokens = tokenizeHandlebarsExpression(tag.content);
+    if (tokens.length === 0) continue;
+
+    const first = normalizeHandlebarsToken(tokens[0].text);
+    if (!first || first === 'else') {
+      continue;
+    }
+
+    if (first.startsWith('!') || first.startsWith('$')) {
+      continue;
+    }
+
+    if (first === '#*inline') {
+      blocks.push({ pushedContext: false });
+      continue;
+    }
+
+    if (first.startsWith('/')) {
+      const block = blocks.pop();
+      if (block?.pushedContext && frames.length > 1) {
+        frames.pop();
+      }
+      continue;
+    }
+
+    if (first === '>' || first === '#>' || first.startsWith('>') || first.startsWith('#>')) {
+      checkHandlebarsPartialTag(source, tag, tokens, frames[frames.length - 1], ctx, state);
+      if (first === '#>' || first.startsWith('#>')) {
+        blocks.push({ pushedContext: false });
+      }
+      continue;
+    }
+
+    if (first.startsWith('<')) {
+      blocks.push({ pushedContext: false });
+      continue;
+    }
+
+    if (first.startsWith('#')) {
+      const blockName = first.slice(1);
+      const pushedContext = checkHandlebarsBlock(source, tag, blockName, tokens, frames, input, ctx, state);
+      blocks.push({ pushedContext });
+      continue;
+    }
+
+    checkHandlebarsValueTag(source, tag, tokens, frames[frames.length - 1], input, ctx, state);
+  }
+}
+
+function checkHandlebarsBlock(
+  source: HandlebarsTemplateSource,
+  tag: { contentStart: number; content: string },
+  blockName: string,
+  tokens: Array<{ text: string; start: number; end: number }>,
+  frames: StageShape[],
+  rootInput: StageShape,
+  ctx: TypeContext,
+  state: HandlebarsCheckState
+): boolean {
+  const current = frames[frames.length - 1];
+
+  if (blockName === 'each') {
+    const pathToken = firstPathToken(tokens.slice(1));
+    if (!pathToken) return false;
+    const path = parseHandlebarsPath(pathToken.text);
+    if (!path) return false;
+    pushHandlebarsPathDiagnostic(source, tag, pathToken, path, current, rootInput, ctx, state);
+    const shape = shapeAtPath(current, path);
+    frames.push(eachItemShape(shape));
+    return true;
+  }
+
+  if (blockName === 'with') {
+    const pathToken = firstPathToken(tokens.slice(1));
+    if (!pathToken) return false;
+    const path = parseHandlebarsPath(pathToken.text);
+    if (!path) return false;
+    pushHandlebarsPathDiagnostic(source, tag, pathToken, path, current, rootInput, ctx, state);
+    frames.push(shapeAtPath(current, path) ?? unknownShape);
+    return true;
+  }
+
+  const args = blockName === 'if' || blockName === 'unless'
+    ? tokens.slice(1)
+    : tokens;
+  for (const token of pathTokensFromHelperArgs(args)) {
+    const path = parseHandlebarsPath(token.text);
+    if (path) {
+      pushHandlebarsPathDiagnostic(source, tag, token, path, current, rootInput, ctx, state);
+    }
+  }
+  return false;
+}
+
+function checkHandlebarsValueTag(
+  source: HandlebarsTemplateSource,
+  tag: { contentStart: number; content: string },
+  tokens: Array<{ text: string; start: number; end: number }>,
+  currentInput: StageShape,
+  rootInput: StageShape,
+  ctx: TypeContext,
+  state: HandlebarsCheckState
+): void {
+  const first = normalizeHandlebarsToken(tokens[0].text);
+  const pathTokens = tokens.length === 1 && first !== 'else'
+    ? tokens
+    : pathTokensFromHelperArgs(tokens.slice(1));
+
+  for (const token of pathTokens) {
+    const path = parseHandlebarsPath(token.text);
+    if (path) {
+      pushHandlebarsPathDiagnostic(source, tag, token, path, currentInput, rootInput, ctx, state);
+    }
+  }
+}
+
+function checkHandlebarsPartialTag(
+  source: HandlebarsTemplateSource,
+  tag: { contentStart: number; content: string },
+  tokens: Array<{ text: string; start: number; end: number }>,
+  currentInput: StageShape,
+  ctx: TypeContext,
+  state: HandlebarsCheckState
+): void {
+  const partialToken = partialNameToken(tokens);
+  if (!partialToken || partialToken.text === '@partial-block') return;
+
+  const first = normalizeHandlebarsToken(tokens[0].text);
+  const contextStartIndex = first === '>' || first === '#>' ? 2 : 1;
+  const contextToken = firstPathToken(tokens.slice(contextStartIndex));
+  let partialInput = currentInput;
+  if (contextToken) {
+    const contextPath = parseHandlebarsPath(contextToken.text);
+    if (contextPath) {
+      pushHandlebarsPathDiagnostic(source, tag, contextToken, contextPath, currentInput, currentInput, ctx, state);
+      partialInput = shapeAtPath(currentInput, contextPath) ?? unknownShape;
+    }
+  }
+
+  if (state.partialStack.has(partialToken.text)) {
+    return;
+  }
+  const partial = findHandlebarsVariable(ctx, partialToken.text);
+  if (!partial) {
+    return;
+  }
+
+  state.partialStack.add(partialToken.text);
+  checkHandlebarsTemplate(
+    {
+      source: partial.value,
+      diagnosticStart: source.preciseSpans ? source.diagnosticStart + tag.contentStart + partialToken.start : source.diagnosticStart,
+      diagnosticEnd: source.preciseSpans ? source.diagnosticStart + tag.contentStart + partialToken.end : source.diagnosticEnd,
+      preciseSpans: false,
+      label: `Handlebars partial '${partialToken.text}' used here`
+    },
+    partialInput,
+    ctx,
+    state
+  );
+  state.partialStack.delete(partialToken.text);
+}
+
+function handlebarsRenderInputShape(input: StageShape): StageShape {
+  if (input.kind === 'union') {
+    return unionShape(input.members.map(handlebarsRenderInputShape));
+  }
+
+  const context = handlebarsContextShape();
+  if (input.kind === 'object') {
+    return mergeObjectShapes(input, objectShape({
+      context: { shape: context }
+    }));
+  }
+  return objectShape({
+    data: { shape: input },
+    context: { shape: context }
+  });
+}
+
+function handlebarsContextShape(): StageShape {
+  return objectShape({
+    flags: { shape: recordShape(booleanShape) },
+    conditions: { shape: recordShape(booleanShape) },
+    request: { shape: unknownShape, optional: true },
+    env: { shape: stringShape, optional: true },
+    cache: { shape: unknownShape, optional: true },
+    log: { shape: unknownShape, optional: true },
+    rate_limit: { shape: unknownShape, optional: true }
+  }, true);
 }
 
 function checkResultStep(step: Extract<PipelineStep, { kind: 'Result' }>, input: PipelineTypeState, ctx: TypeContext): PipelineTypeState {
@@ -1188,6 +1441,241 @@ function renderDebtPath(path: PathSegment[]): string {
     out += segment.kind === 'field' ? `.${segment.name}` : '[]';
   }
   return out;
+}
+
+function scanHandlebarsTags(source: string): Array<{ content: string; contentStart: number; start: number; end: number }> {
+  const tags: Array<{ content: string; contentStart: number; start: number; end: number }> = [];
+  let index = 0;
+
+  while (index < source.length) {
+    const open = source.indexOf('{{', index);
+    if (open === -1) break;
+
+    const triple = source[open + 2] === '{';
+    const contentStart = open + (triple ? 3 : 2);
+    const closeNeedle = triple ? '}}}' : '}}';
+    const close = source.indexOf(closeNeedle, contentStart);
+    if (close === -1) break;
+
+    tags.push({
+      content: source.slice(contentStart, close),
+      contentStart,
+      start: open,
+      end: close + closeNeedle.length
+    });
+    index = close + closeNeedle.length;
+  }
+
+  return tags;
+}
+
+function tokenizeHandlebarsExpression(content: string): Array<{ text: string; start: number; end: number }> {
+  const tokens: Array<{ text: string; start: number; end: number }> = [];
+  let index = 0;
+
+  while (index < content.length) {
+    while (index < content.length && /\s/.test(content[index])) index++;
+    if (index >= content.length) break;
+
+    const start = index;
+    const quote = content[index] === '"' || content[index] === "'" ? content[index] : undefined;
+    if (quote) {
+      index++;
+      let escaped = false;
+      while (index < content.length) {
+        const ch = content[index++];
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === quote) {
+          break;
+        }
+      }
+      tokens.push({ text: content.slice(start, index), start, end: index });
+      continue;
+    }
+
+    while (index < content.length && !/\s/.test(content[index])) index++;
+    tokens.push({ text: content.slice(start, index), start, end: index });
+  }
+
+  return tokens;
+}
+
+function normalizeHandlebarsToken(token: string): string {
+  return token.replace(/^~+/, '').replace(/~+$/, '').trim();
+}
+
+function partialNameToken(tokens: Array<{ text: string; start: number; end: number }>): { text: string; start: number; end: number } | undefined {
+  if (tokens.length === 0) return undefined;
+  const first = normalizeHandlebarsToken(tokens[0].text);
+  if (first === '>' || first === '#>') {
+    return normalizeTokenEntry(tokens[1]);
+  }
+  if (first.startsWith('>') || first.startsWith('#>')) {
+    const prefixLength = first.startsWith('#>') ? 2 : 1;
+    const token = tokens[0];
+    return {
+      text: first.slice(prefixLength),
+      start: token.start + token.text.indexOf(first) + prefixLength,
+      end: token.end
+    };
+  }
+  return undefined;
+}
+
+function normalizeTokenEntry(token: { text: string; start: number; end: number } | undefined): { text: string; start: number; end: number } | undefined {
+  if (!token) return undefined;
+  const normalized = normalizeHandlebarsToken(token.text);
+  if (!normalized) return undefined;
+  const offset = token.text.indexOf(normalized);
+  return {
+    text: normalized,
+    start: token.start + Math.max(0, offset),
+    end: token.start + Math.max(0, offset) + normalized.length
+  };
+}
+
+function firstPathToken(tokens: Array<{ text: string; start: number; end: number }>): { text: string; start: number; end: number } | undefined {
+  return pathTokensFromHelperArgs(tokens)[0];
+}
+
+function pathTokensFromHelperArgs(tokens: Array<{ text: string; start: number; end: number }>): Array<{ text: string; start: number; end: number }> {
+  const result: Array<{ text: string; start: number; end: number }> = [];
+
+  for (const token of tokens) {
+    const normalized = normalizeTokenEntry(token);
+    if (!normalized) continue;
+    if (normalized.text.includes('=')) {
+      const [, value] = normalized.text.split(/=(.*)/s);
+      if (value) {
+        const valueStart = normalized.text.indexOf(value);
+        const valueToken = {
+          text: value,
+          start: normalized.start + valueStart,
+          end: normalized.start + valueStart + value.length
+        };
+        if (parseHandlebarsPath(valueToken.text)) {
+          result.push(valueToken);
+        }
+      }
+      continue;
+    }
+    if (parseHandlebarsPath(normalized.text)) {
+      result.push(normalized);
+    }
+  }
+
+  return result;
+}
+
+function parseHandlebarsPath(token: string): PathSegment[] | undefined {
+  let normalized = normalizeHandlebarsToken(token).replace(/^&/, '');
+  if (!normalized || normalized === '.' || normalized === 'this') return [];
+  if (normalized.startsWith('@') || normalized.startsWith('$')) return undefined;
+  if (normalized.startsWith('"') || normalized.startsWith("'")) return undefined;
+  if (/^-?\d+(\.\d+)?$/.test(normalized)) return undefined;
+  if (['true', 'false', 'null', 'undefined'].includes(normalized)) return undefined;
+  if (normalized.includes('(') || normalized.includes(')')) return undefined;
+  if (normalized.startsWith('../')) return undefined;
+  if (normalized.startsWith('./')) normalized = normalized.slice(2);
+  if (normalized.startsWith('this.')) normalized = normalized.slice('this.'.length);
+  if (normalized.startsWith('.')) normalized = normalized.slice(1);
+  if (!normalized) return [];
+
+  const parts = normalized.split(/[./]/).filter(Boolean);
+  if (parts.length === 0 || parts.some(part => !/^[A-Za-z_][\w-]*$/.test(part))) {
+    return undefined;
+  }
+  return parts.map(fieldSegment);
+}
+
+function pushHandlebarsPathDiagnostic(
+  source: HandlebarsTemplateSource,
+  tag: { contentStart: number; content: string },
+  token: { text: string; start: number; end: number },
+  path: PathSegment[],
+  currentInput: StageShape,
+  rootInput: StageShape,
+  ctx: TypeContext,
+  state: HandlebarsCheckState
+): void {
+  if (path.length === 0) return;
+  const problem = validateHandlebarsPath(currentInput, path);
+  if (!problem) return;
+
+  const start = source.preciseSpans
+    ? source.diagnosticStart + tag.contentStart + token.start
+    : source.diagnosticStart;
+  const end = source.preciseSpans
+    ? source.diagnosticStart + tag.contentStart + token.end
+    : source.diagnosticEnd;
+  const key = `${start}:${end}:${pathToHandlebars(path)}:${problem}:${source.label || ''}`;
+  if (state.emitted.has(key)) return;
+  state.emitted.add(key);
+
+  const detail = handlebarsProblemMessage(problem, path, rootInput);
+  const message = source.label
+    ? `${source.label} has type error: ${detail}`
+    : `Handlebars type check: ${detail}`;
+  ctx.push(DiagnosticSeverity.Error, start, end, message);
+}
+
+function validateHandlebarsPath(shape: StageShape, path: PathSegment[]): string | undefined {
+  if (shape.kind === 'union') {
+    const failures = shape.members.map(member => validateHandlebarsPath(member, path));
+    return failures.some(failure => !failure) ? undefined : failures.find(Boolean);
+  }
+  return validatePath(shape, path);
+}
+
+function handlebarsProblemMessage(problem: string, path: PathSegment[], input: StageShape): string {
+  const missing = missingFieldFromProblem(problem);
+  if (missing) {
+    return `property "${missing}" is not present for {{${pathToHandlebars(path)}}}. Previous stage output: ${renderShape(input)}.`;
+  }
+  return `{{${pathToHandlebars(path)}}} is invalid: ${problem}. Previous stage output: ${renderShape(input)}.`;
+}
+
+function pathToHandlebars(path: PathSegment[]): string {
+  if (path.length === 0) return 'this';
+  return path.map(segment => segment.kind === 'field' ? segment.name : '[0]').join('.');
+}
+
+function shapeAtPath(shape: StageShape | undefined, path: PathSegment[]): StageShape | undefined {
+  if (!shape) return undefined;
+  if (path.length === 0 || shape.kind === 'unknown') return shape;
+  if (shape.kind === 'union') {
+    const members = shape.members.map(member => shapeAtPath(member, path)).filter((member): member is StageShape => !!member);
+    return members.length > 0 ? unionShape(members) : undefined;
+  }
+
+  const [head, ...tail] = path;
+  if (head.kind === 'index') {
+    return shape.kind === 'array' ? shapeAtPath(shape.item, tail) : undefined;
+  }
+  if (shape.kind !== 'object') {
+    return undefined;
+  }
+
+  const field = shape.fields[head.name!];
+  if (field) {
+    return shapeAtPath(field.shape, tail);
+  }
+  return shape.additional ? unknownShape : undefined;
+}
+
+function eachItemShape(shape: StageShape | undefined): StageShape {
+  if (!shape || shape.kind === 'unknown') return unknownShape;
+  if (shape.kind === 'array') return shape.item;
+  if (shape.kind === 'object') return unknownShape;
+  if (shape.kind === 'union') return unionShape(shape.members.map(eachItemShape));
+  return unknownShape;
+}
+
+function findHandlebarsVariable(ctx: TypeContext, ref: string): Variable | undefined {
+  return findVariable(ctx, 'handlebars', ref) || findVariable(ctx, 'mustache', ref);
 }
 
 function findVariable(ctx: TypeContext, type: string, ref: string): Variable | undefined {
