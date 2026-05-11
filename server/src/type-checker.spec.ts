@@ -435,6 +435,43 @@ POST /login
   );
 });
 
+test('named pipeline diagnostics stay on the definition after local shape materializes', () => {
+  const source = `
+pipeline teamsOutput =
+  |> jq: \`{
+    names: .data.rows | map(.name),
+    count: .data.rowCount
+  }\`
+
+pipeline getTeams =
+  |> jq: \`{ sqlParams: [] }\`
+  |> pg: \`SELECT id, name FROM teams\`
+  |> assert: \`{
+    data: {
+      rows: [{ id: string | number, name: string }],
+      rowCount: number
+    }
+  }\`
+  |> jq: \`{
+    teams: .datum.rows,
+    teamCount: .data.rowCount
+  }\`
+
+GET /strict/teams-ok
+  |> getTeams
+  |> teamsOutput
+`;
+  const diagnostics = collectTypeDiagnosticDetails(source);
+  const diagnostic = diagnostics.find(item => item.message.includes('datum'));
+
+  assert.ok(diagnostic);
+  assert.equal(
+    diagnostics.some(item => item.message.includes("Pipeline 'getTeams' called here") && item.message.includes('datum')),
+    false
+  );
+  assert.equal(source.slice(diagnostic.start, diagnostic.end).includes('datum'), true);
+});
+
 test('config typecheck strict enables strict mode', () => {
   const messages = collectTypeDiagnostics(`
 config typecheck {

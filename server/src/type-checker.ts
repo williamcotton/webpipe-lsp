@@ -63,6 +63,7 @@ interface TypeContext {
   resolving: Set<string>;
   options: ResolvedTypeCheckOptions;
   push: TypeDiagnosticPush;
+  markPipelineMaterialized?: () => void;
 }
 
 type UnknownProducer = 'pg' | 'fetch' | 'graphql' | 'lua' | 'js' | 'route-body' | 'pipeline' | 'custom';
@@ -180,12 +181,20 @@ function checkNamedPipeline(name: string, input: PipelineTypeState, ctx: TypeCon
     return stateOf(unknownShape);
   }
 
+  let routeDiagnosticsToCallSite = true;
   const childCtx: TypeContext = {
     ...ctx,
     asyncTasks: new Map(ctx.asyncTasks),
     resolving: new Set([...ctx.resolving, name]),
-    push: (severity, _start, _end, message) => {
-      ctx.push(severity, start, end, `Pipeline '${name}' called here has type error: ${message}`);
+    push: (severity, diagnosticStart, diagnosticEnd, message) => {
+      if (routeDiagnosticsToCallSite) {
+        ctx.push(severity, start, end, `Pipeline '${name}' called here has type error: ${message}`);
+        return;
+      }
+      ctx.push(severity, diagnosticStart, diagnosticEnd, message);
+    },
+    markPipelineMaterialized: () => {
+      routeDiagnosticsToCallSite = false;
     }
   };
   return checkPipeline(pipeline.pipeline, input, childCtx);
@@ -210,12 +219,16 @@ function checkPipeline(pipeline: Pipeline, input: PipelineTypeState, ctx: TypeCo
         ctx.asyncTasks.set(asyncName, output);
       } else {
         current = checkRegularStep(step, current, ctx, true, isLastStep);
+        if (stepMaterializesLocalShape(step, ctx)) {
+          markPipelineMaterialized(ctx);
+        }
       }
       continue;
     }
 
     if (step.kind === 'Result') {
       current = checkResultStep(step, current, ctx);
+      markPipelineMaterialized(ctx);
       continue;
     }
 
@@ -229,6 +242,7 @@ function checkPipeline(pipeline: Pipeline, input: PipelineTypeState, ctx: TypeCo
         shape: unionShape([thenShape.shape, elseShape.shape]),
         debts: dedupeDebts([...thenShape.debts, ...elseShape.debts])
       };
+      markPipelineMaterialized(ctx);
       continue;
     }
 
@@ -245,16 +259,43 @@ function checkPipeline(pipeline: Pipeline, input: PipelineTypeState, ctx: TypeCo
             debts: dedupeDebts(branches.flatMap(branch => branch.debts))
           }
         : current;
+      markPipelineMaterialized(ctx);
       continue;
     }
 
     if (step.kind === 'Foreach') {
       checkPipeline(step.pipeline, stateOf(unknownShape), { ...ctx, asyncTasks: new Map(ctx.asyncTasks) });
       current = current.shape.kind === 'unknown' ? stateOf(unknownShape, current.debts) : current;
+      markPipelineMaterialized(ctx);
     }
   }
 
   return current;
+}
+
+function markPipelineMaterialized(ctx: TypeContext): void {
+  ctx.markPipelineMaterialized?.();
+}
+
+function stepMaterializesLocalShape(step: Extract<PipelineStep, { kind: 'Regular' }>, ctx: TypeContext): boolean {
+  switch (step.name) {
+    case 'jq':
+    case 'assert':
+    case 'validate':
+    case 'pg':
+    case 'fetch':
+    case 'graphql':
+    case 'auth':
+    case 'handlebars':
+    case 'lua':
+    case 'js':
+    case 'join':
+      return true;
+    case 'pipeline':
+      return step.hasConfig;
+    default:
+      return !step.hasConfig && !!findPipeline(ctx, step.name);
+  }
 }
 
 function checkRegularStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: PipelineTypeState, ctx: TypeContext, allowAsync: boolean, isLastStep: boolean): PipelineTypeState {
