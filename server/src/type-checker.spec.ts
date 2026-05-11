@@ -404,6 +404,37 @@ GET /teams
   );
 });
 
+test('named pipeline diagnostics point at the invalid call site', () => {
+  const source = `
+pipeline teamsOutput =
+  |> jq: \`{
+    names: .data.rows | map(.name),
+    count: .data.rowCount
+  }\`
+
+GET /teams
+  |> jq: \`{ data: { rows: [{ name: "Ada" }], rowCount: 1 } }\`
+  |> teamsOutput
+
+POST /login
+  |> validate: \`{
+    login: string(3..50),
+    password: string(6..100)
+  }\`
+  |> jq: \`{ login: .body.login }\`
+  |> teamsOutput
+`;
+  const diagnostics = collectTypeDiagnosticDetails(source);
+  const diagnostic = diagnostics.find(item => item.message.includes("Pipeline 'teamsOutput' called here has type error"));
+
+  assert.ok(diagnostic);
+  assert.equal(diagnostic.start, source.lastIndexOf('teamsOutput'));
+  assert.equal(
+    diagnostic.message.includes('property "data" is not present') || diagnostic.message.includes('.data.rows may be missing'),
+    true
+  );
+});
+
 test('config typecheck strict enables strict mode', () => {
   const messages = collectTypeDiagnostics(`
 config typecheck {

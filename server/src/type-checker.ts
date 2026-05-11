@@ -183,7 +183,10 @@ function checkNamedPipeline(name: string, input: PipelineTypeState, ctx: TypeCon
   const childCtx: TypeContext = {
     ...ctx,
     asyncTasks: new Map(ctx.asyncTasks),
-    resolving: new Set([...ctx.resolving, name])
+    resolving: new Set([...ctx.resolving, name]),
+    push: (severity, _start, _end, message) => {
+      ctx.push(severity, start, end, `Pipeline '${name}' called here has type error: ${message}`);
+    }
   };
   return checkPipeline(pipeline.pipeline, input, childCtx);
 }
