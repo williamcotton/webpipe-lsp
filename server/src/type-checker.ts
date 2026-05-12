@@ -1850,6 +1850,13 @@ function validatePath(shape: StageShape, path: PathSegment[]): string | undefine
 
 function findRequiredFieldMismatch(actual: StageShape, expected: StageShape, path = '$'): string | undefined {
   if (actual.kind === 'unknown' || expected.kind === 'unknown') return undefined;
+  if (actual.kind === 'union') {
+    for (const member of actual.members) {
+      const issue = findRequiredFieldMismatch(member, expected, path);
+      if (issue) return issue;
+    }
+    return undefined;
+  }
   if (expected.kind === 'union') {
     return expected.members.every(member => findRequiredFieldMismatch(actual, member, path))
       ? findRequiredFieldMismatch(actual, expected.members[0], path)

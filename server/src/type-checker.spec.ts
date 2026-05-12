@@ -622,3 +622,16 @@ GET /teams
     true
   );
 });
+
+test('assert contract accepts array whose item type is a union of compatible objects', () => {
+  const messages = collectTypeDiagnostics(`
+GET /
+  |> jq: \`{ tasks: [{id: 1, title: "Learn WebPipe"}, {id: 2, title: "Build HTMX App"}] }\`
+  |> assert: \`{ tasks: [{ id: number, title: string }] }\`
+`);
+
+  assert.equal(
+    messages.some(message => message.includes('Assert contract expects')),
+    false
+  );
+});
