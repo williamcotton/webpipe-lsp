@@ -2,7 +2,7 @@
   "name": "webpipe-lsp",
   "displayName": "Web Pipe",
   "description": "Web Pipe",
-  "version": "2.0.82",
+  "version": "2.0.83",
   "publisher": "williamcotton",
   "author": {
     "name": "William Cotton",
@@ -146,7 +146,7 @@
   },
   "dependencies": {
     "@handlebars/parser": "2.2.1",
-    "jqtype": "^0.4.0",
+    "jqtype": "^0.5.0",
     "vscode-languageclient": "^9.0.1",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.11",
