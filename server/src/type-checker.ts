@@ -358,13 +358,32 @@ function checkRegularStep(step: Extract<PipelineStep, { kind: 'Regular' }>, inpu
       if (!step.hasConfig) {
         return input;
       }
-      return checkNamedPipeline(step.config.trim(), applyPipelineArgs(step, input, ctx), ctx, step.configStart ?? step.nameStart, step.configEnd ?? step.nameEnd);
+      return mergePipelineCallResult(
+        input,
+        checkNamedPipeline(step.config.trim(), applyPipelineArgs(step, input, ctx), ctx, step.configStart ?? step.nameStart, step.configEnd ?? step.nameEnd)
+      );
     default:
       if (!step.hasConfig && findPipeline(ctx, step.name)) {
-        return checkNamedPipeline(step.name, applyPipelineArgs(step, input, ctx), ctx, step.nameStart, step.nameEnd);
+        return mergePipelineCallResult(
+          input,
+          checkNamedPipeline(step.name, applyPipelineArgs(step, input, ctx), ctx, step.nameStart, step.nameEnd)
+        );
       }
       return input;
   }
+}
+
+// Pipeline calls aren't a registered middleware, so at runtime the executor
+// falls back to `StateBehavior::Merge` (see executor/step.rs apply_result_to_state).
+// That means the inner pipeline's output is *shallow-merged* on top of the
+// caller's state at the call site, not used as a full replacement. Mirror that
+// here so the caller's fields (route runtime keys, inline-arg fields, etc.)
+// survive across pipeline-call boundaries.
+function mergePipelineCallResult(caller: PipelineTypeState, inner: PipelineTypeState): PipelineTypeState {
+  return {
+    shape: mergeObjectShapes(caller.shape, inner.shape),
+    debts: inner.debts
+  };
 }
 
 function checkJqStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: PipelineTypeState, ctx: TypeContext, isLastStep: boolean): PipelineTypeState {
@@ -469,11 +488,41 @@ function pushJqtypeDiagnostics(report: any, filter: JqFilterSource, ctx: TypeCon
     const message = diagnostic.message || diagnostic.reason || String(diagnostic);
     const missingProperty = missingPropertyFromJqtypeMessage(message);
     if (missingProperty) {
+      // Suppress when the specific access reported by jqtype is the right-hand
+      // operand of `//`. jqtype is unaware that `.a // .b` falls back when
+      // `.a` is null/absent, so a missing `.b` is a deliberate fallback rather
+      // than a bug. The LSP already filters such accesses from its own
+      // path diagnostics via isNullAlternativeOperand; mirror that here.
+      // NOTE: As of jqtype 0.6.0, span positions can be wrong for properties
+      // that appear more than once in the filter source (it returns the first
+      // textual occurrence). This suppression only fires when jqtype reports
+      // an accurate span. See jqtype-rhs-span-spec.md.
+      const spanStart = typeof span?.start === 'number' ? span.start : undefined;
+      if (spanStart !== undefined && isFallbackAccessAt(filter.source, missingProperty, spanStart)) {
+        continue;
+      }
       missingProperties.add(missingProperty);
     }
     ctx.push(severity, start, end, `jq type check: ${message}`);
   }
   return missingProperties;
+}
+
+function isFallbackAccessAt(filter: string, propertyName: string, spanStart: number): boolean {
+  // Find the `.<propertyName>` access at or near spanStart.
+  // jqtype span positions may point at the property name (after the dot) or
+  // at the dot itself; tolerate both by scanning a small window.
+  const searchStart = Math.max(0, spanStart - 1);
+  const searchEnd = Math.min(filter.length, spanStart + propertyName.length + 1);
+  const slice = filter.slice(searchStart, searchEnd);
+  const idx = slice.indexOf(`.${propertyName}`);
+  if (idx === -1) return false;
+  const dotIndex = searchStart + idx;
+  // Ensure this is a fresh access (not part of `.foo.<propertyName>`).
+  if (dotIndex > 0 && /[\w.]/.test(filter[dotIndex - 1])) return false;
+  let k = dotIndex - 1;
+  while (k >= 0 && (filter[k] === ' ' || filter[k] === '\t' || filter[k] === '\n')) k--;
+  return k >= 1 && filter[k] === '/' && filter[k - 1] === '/';
 }
 
 function pushPipelinePathDiagnostics(pathDiagnostics: JqPathDiagnostic[], jqtypeMissingProperties: Set<string>, input: StageShape, ctx: TypeContext, stageLabel = 'this jq stage'): void {
@@ -553,11 +602,14 @@ function checkAssertStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input
 
   const issue = findRequiredFieldMismatch(input.shape, parsed.shape);
   if (issue) {
+    const useStart = step.configStart ?? step.nameStart;
+    const useEnd = step.configEnd ?? step.nameEnd;
+    const contractLabel = step.configType === 'identifier' ? ` '${step.config.trim()}'` : '';
     ctx.push(
       DiagnosticSeverity.Warning,
-      contract.start,
-      contract.end,
-      `Assert contract expects ${issue}, but previous stage output is ${renderShape(input.shape)}.`
+      useStart,
+      useEnd,
+      `Assert contract${contractLabel} expects ${issue}, but previous stage output is ${renderShape(input.shape)}.`
     );
   }
 
@@ -1171,10 +1223,61 @@ function errorEnvelopeShape(errorType: string): StageShape {
 }
 
 function resultBranchInputShape(input: StageShape, branchType: { kind: string; name?: string }): StageShape {
-  if (branchType.kind !== 'Custom' || !branchType.name) {
-    return input;
+  if (branchType.kind === 'Ok') {
+    return narrowToOkShape(input);
   }
-  return mergeObjectShapes(input, errorEnvelopeShape(branchType.name));
+  if (branchType.kind === 'Custom' && branchType.name) {
+    const narrowed = narrowToErrorShape(input, branchType.name);
+    return mergeObjectShapes(narrowed, errorEnvelopeShape(branchType.name));
+  }
+  return input;
+}
+
+function narrowToOkShape(input: StageShape): StageShape {
+  if (input.kind === 'union') {
+    const okMembers = input.members.filter(member => !memberLooksLikeError(member));
+    if (okMembers.length > 0 && okMembers.length < input.members.length) {
+      const stripped = okMembers.map(stripErrorsField);
+      return stripped.length === 1 ? stripped[0] : unionShape(stripped);
+    }
+  }
+  return stripErrorsField(input);
+}
+
+function narrowToErrorShape(input: StageShape, name: string): StageShape {
+  if (input.kind !== 'union') return input;
+  const matching = input.members.filter(member => memberCouldHaveErrorType(member, name));
+  if (matching.length === 0 || matching.length === input.members.length) return input;
+  return matching.length === 1 ? matching[0] : unionShape(matching);
+}
+
+function memberLooksLikeError(shape: StageShape): boolean {
+  if (shape.kind !== 'object') return false;
+  const errors = shape.fields.errors;
+  return !!errors && !errors.optional && errors.shape.kind === 'array';
+}
+
+function memberCouldHaveErrorType(shape: StageShape, name: string): boolean {
+  if (shape.kind !== 'object') return false;
+  const errors = shape.fields.errors;
+  if (!errors || errors.shape.kind !== 'array') return false;
+  const item = errors.shape.item;
+  if (item.kind === 'object') {
+    const typeField = item.fields.type;
+    if (typeField && typeField.shape.kind === 'string' && typeField.shape.literal !== undefined) {
+      return typeField.shape.literal === name;
+    }
+  }
+  return true;
+}
+
+function stripErrorsField(shape: StageShape): StageShape {
+  if (shape.kind !== 'object' || !shape.fields.errors) return shape;
+  const fields: Record<string, ShapeField> = {};
+  for (const [key, value] of Object.entries(shape.fields)) {
+    if (key !== 'errors') fields[key] = value;
+  }
+  return objectShape(fields, shape.additional);
 }
 
 function objectShape(fields: Record<string, ShapeField>, additional = false): StageShape {
@@ -1194,7 +1297,10 @@ function unionShape(members: StageShape[]): StageShape {
   const rendered = new Set<string>();
   const unique: StageShape[] = [];
   for (const member of flat) {
-    const key = renderShape(member);
+    // Use a full, untruncated identity for dedup. renderShape elides large
+    // objects with "+N more fields" for display, which makes structurally
+    // distinct shapes look identical and incorrectly collapses unions.
+    const key = shapeIdentity(member);
     if (!rendered.has(key)) {
       rendered.add(key);
       unique.push(member);
@@ -1203,9 +1309,42 @@ function unionShape(members: StageShape[]): StageShape {
   return unique.length === 1 ? unique[0] : { kind: 'union', members: unique };
 }
 
+function shapeIdentity(shape: StageShape): string {
+  switch (shape.kind) {
+    case 'unknown':
+      return 'unknown';
+    case 'null':
+      return 'null';
+    case 'boolean':
+      return shape.literal === undefined ? 'boolean' : `bool:${shape.literal}`;
+    case 'number':
+      return shape.literal === undefined ? 'number' : `num:${shape.literal}`;
+    case 'string':
+      return shape.literal === undefined ? 'string' : `str:${JSON.stringify(shape.literal)}`;
+    case 'array':
+      return `array(${shapeIdentity(shape.item)})`;
+    case 'union':
+      return `union(${shape.members.map(shapeIdentity).sort().join('|')})`;
+    case 'object': {
+      const entries = Object.entries(shape.fields).sort((a, b) => a[0].localeCompare(b[0]));
+      const fields = entries.map(([k, f]) => `${k}${f.optional ? '?' : ''}:${shapeIdentity(f.shape)}`);
+      return `obj{${fields.join(',')}${shape.additional ? ',...' : ''}}`;
+    }
+  }
+}
+
 function mergeObjectShapes(left: StageShape, right: StageShape): StageShape {
   if (left.kind === 'unknown') return right;
   if (right.kind === 'unknown') return left;
+  // Distribute merges over unions so that a helper pipeline returning
+  // `{ a } | { b }` still merges with the caller's surrounding state per
+  // backpack semantics (object outputs merge, even when they vary by branch).
+  if (left.kind === 'union') {
+    return unionShape(left.members.map(member => mergeObjectShapes(member, right)));
+  }
+  if (right.kind === 'union') {
+    return unionShape(right.members.map(member => mergeObjectShapes(left, member)));
+  }
   if (left.kind !== 'object' || right.kind !== 'object') return right;
 
   const merged: Record<string, ShapeField> = { ...left.fields };
@@ -1730,11 +1869,19 @@ function renderShape(shape: StageShape): string {
     case 'union':
       return shape.members.map(renderShape).join(' | ');
     case 'object': {
-      const fields = Object.entries(shape.fields)
-        .slice(0, 8)
-        .map(([key, field]) => `${key}${field.optional ? '?' : ''}: ${renderShape(field.shape)}`);
-      const suffix = shape.additional ? (fields.length > 0 ? ', ...' : '...') : '';
-      return `{ ${fields.join(', ')}${suffix} }`;
+      const allEntries = Object.entries(shape.fields);
+      const cap = 8;
+      const shown = allEntries.slice(0, cap);
+      const hidden = allEntries.length - shown.length;
+      const fields = shown.map(([key, field]) => `${key}${field.optional ? '?' : ''}: ${renderShape(field.shape)}`);
+      const parts: string[] = [...fields];
+      if (hidden > 0) {
+        parts.push(`+${hidden} more field${hidden === 1 ? '' : 's'}`);
+      }
+      if (shape.additional) {
+        parts.push('...');
+      }
+      return parts.length === 0 ? '{}' : `{ ${parts.join(', ')} }`;
     }
   }
 }
@@ -1851,11 +1998,12 @@ function validatePath(shape: StageShape, path: PathSegment[]): string | undefine
 function findRequiredFieldMismatch(actual: StageShape, expected: StageShape, path = '$'): string | undefined {
   if (actual.kind === 'unknown' || expected.kind === 'unknown') return undefined;
   if (actual.kind === 'union') {
-    for (const member of actual.members) {
-      const issue = findRequiredFieldMismatch(member, expected, path);
-      if (issue) return issue;
-    }
-    return undefined;
+    // assert is a runtime check that fires on whatever member actually arrives.
+    // If at least one union member satisfies the contract, the assert can
+    // succeed at runtime — only warn when NO member matches.
+    const memberIssues = actual.members.map(member => findRequiredFieldMismatch(member, expected, path));
+    if (memberIssues.some(issue => issue === undefined)) return undefined;
+    return memberIssues.find(Boolean);
   }
   if (expected.kind === 'union') {
     return expected.members.every(member => findRequiredFieldMismatch(actual, member, path))
