@@ -91,6 +91,73 @@ GET /test-sql-error
   );
 });
 
+test('result error branches do not open known input shapes to arbitrary fields', () => {
+  const source = `
+GET /signal/:city
+  |> jq: \`{ city: .params.city }\`
+  |> fetch("https://example.test/" + (.city | tostring))
+  |> result
+    networkError(200):
+      |> jq: \`{ city: .cityNonExistant, source: "offline" }\`
+`;
+  const diagnostic = collectTypeDiagnosticDetails(source)
+    .find(item => item.message.includes('cityNonExistant'));
+
+  assert.ok(diagnostic);
+  assert.equal(source.slice(diagnostic.start, diagnostic.end), '.cityNonExistant');
+});
+
+test('GraphQL loader target pipelines are type checked', () => {
+  const messages = collectTypeDiagnostics(`
+graphqlSchema = \`
+  type Team { id: ID!, name: String! }
+  type Launch { ownerId: ID!, owner: Team }
+  type Query { launches: [Launch!]! }
+\`
+
+pipeline TeamByIdLoader =
+  |> jq: \`
+    reduce (.keys // [])[] as $key (
+      {};
+      .[$key] = ($teamsNonExistant[] // null)
+    )
+  \`
+
+resolver Launch.owner =
+  |> loader(.parent.ownerId): TeamByIdLoader
+`);
+
+  assert.equal(
+    messages.some(message => message.includes('$teamsNonExistant')),
+    true
+  );
+});
+
+test('GraphQL loader target pipelines are checked with loader data shape', () => {
+  const messages = collectTypeDiagnostics(`
+graphqlSchema = \`
+  type Team { id: ID!, name: String! }
+  type Launch { ownerId: ID!, owner: Team }
+  type Query { launches: [Launch!]! }
+\`
+
+pipeline seedTeams =
+  |> jq: \`{ teams: [{ id: 1, name: "Platform" }] }\`
+
+pipeline TeamByIdLoader =
+  |> seedTeams
+  |> jq: \`{ keys: .keysNonExistant, teams: .teams }\`
+
+resolver Launch.owner =
+  |> loader(.parent.ownerId): TeamByIdLoader
+`);
+
+  assert.equal(
+    messages.some(message => message.includes('keysNonExistant')),
+    true
+  );
+});
+
 test('$context references are treated as jq external variables', () => {
   const messages = collectTypeDiagnostics(`
 GET /test-context-ratelimit

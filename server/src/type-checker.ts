@@ -316,6 +316,7 @@ function stepMaterializesLocalShape(step: Extract<PipelineStep, { kind: 'Regular
     case 'lua':
     case 'js':
     case 'join':
+    case 'loader':
       return true;
     case 'pipeline':
       return step.hasConfig;
@@ -354,6 +355,8 @@ function checkRegularStep(step: Extract<PipelineStep, { kind: 'Regular' }>, inpu
       return transformUnknownState(input, step, 'js');
     case 'join':
       return applyJoinShape(input, step, ctx);
+    case 'loader':
+      return checkLoaderStep(step, ctx);
     case 'pipeline':
       if (!step.hasConfig) {
         return input;
@@ -384,6 +387,22 @@ function mergePipelineCallResult(caller: PipelineTypeState, inner: PipelineTypeS
     shape: mergeObjectShapes(caller.shape, inner.shape),
     debts: inner.debts
   };
+}
+
+function checkLoaderStep(step: Extract<PipelineStep, { kind: 'Regular' }>, ctx: TypeContext): PipelineTypeState {
+  if (!step.hasConfig) {
+    return stateOf(unknownShape);
+  }
+
+  checkNamedPipeline(
+    step.config.trim(),
+    stateOf(graphqlLoaderInputShape()),
+    ctx,
+    step.configStart ?? step.nameStart,
+    step.configEnd ?? step.nameEnd
+  );
+
+  return stateOf(unknownShape);
 }
 
 function checkJqStep(step: Extract<PipelineStep, { kind: 'Regular' }>, input: PipelineTypeState, ctx: TypeContext, isLastStep: boolean): PipelineTypeState {
@@ -473,6 +492,7 @@ function pushJqtypeDiagnostics(report: any, filter: JqFilterSource, ctx: TypeCon
     : Array.isArray(report?.errors)
       ? report.errors
       : [];
+  const seenDiagnostics = new Set<string>();
 
   for (const diagnostic of diagnostics) {
     const span = diagnostic.span || diagnostic.range || diagnostic.location;
@@ -503,6 +523,11 @@ function pushJqtypeDiagnostics(report: any, filter: JqFilterSource, ctx: TypeCon
       }
       missingProperties.add(missingProperty);
     }
+    const dedupeKey = `${severity}:${start}:${end}:${message}`;
+    if (seenDiagnostics.has(dedupeKey)) {
+      continue;
+    }
+    seenDiagnostics.add(dedupeKey);
     ctx.push(severity, start, end, `jq type check: ${message}`);
   }
   return missingProperties;
@@ -1168,6 +1193,18 @@ function graphqlResolverInputShape(): StageShape {
   }, true);
 }
 
+function graphqlLoaderInputShape(): StageShape {
+  return objectShape({
+    keys: { shape: arrayShape(unknownShape) },
+    args: { shape: recordShape(unknownShape) },
+    context: {
+      shape: objectShape({
+        user: { shape: authUserShape(), optional: true }
+      }, true)
+    }
+  }, false);
+}
+
 function authUserShape(flow = 'required'): StageShape {
   return objectShape({
     id: { shape: unionShape([stringShape, numberShape]) },
@@ -1219,7 +1256,7 @@ function errorEnvelopeShape(errorType: string): StageShape {
         url: { shape: stringShape, optional: true }
       }, true))
     }
-  }, true);
+  }, false);
 }
 
 function resultBranchInputShape(input: StageShape, branchType: { kind: string; name?: string }): StageShape {
@@ -1228,9 +1265,20 @@ function resultBranchInputShape(input: StageShape, branchType: { kind: string; n
   }
   if (branchType.kind === 'Custom' && branchType.name) {
     const narrowed = narrowToErrorShape(input, branchType.name);
-    return mergeObjectShapes(narrowed, errorEnvelopeShape(branchType.name));
+    return mergeErrorEnvelopeShape(narrowed, branchType.name);
   }
   return input;
+}
+
+function mergeErrorEnvelopeShape(input: StageShape, errorType: string): StageShape {
+  const envelope = errorEnvelopeShape(errorType);
+  if (input.kind === 'unknown') {
+    return mergeObjectShapes(recordShape(unknownShape), envelope);
+  }
+  if (input.kind === 'union') {
+    return unionShape(input.members.map(member => mergeErrorEnvelopeShape(member, errorType)));
+  }
+  return mergeObjectShapes(input, envelope);
 }
 
 function narrowToOkShape(input: StageShape): StageShape {
