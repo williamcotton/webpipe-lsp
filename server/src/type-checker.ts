@@ -63,6 +63,7 @@ interface TypeContext {
   variables: Map<string, Variable>;
   asyncTasks: Map<string, PipelineTypeState>;
   resolving: Set<string>;
+  coveredPipelines: Set<string>;
   options: ResolvedTypeCheckOptions;
   push: TypeDiagnosticPush;
   markPipelineMaterialized?: () => void;
@@ -160,12 +161,14 @@ function readBooleanConfig(program: Program, name: string, key: string): boolean
 
 export function checkProgramTypes(program: Program, push: TypeDiagnosticPush, options: TypeCheckOptions = {}): void {
   const resolvedOptions = resolveTypeCheckOptions(program, options);
+  const coveredPipelines = new Set<string>();
   const ctx: TypeContext = {
     program,
     pipelines: new Map((program.pipelines || []).map(pipeline => [pipeline.name, pipeline])),
     variables: new Map((program.variables || []).map(variable => [`${variable.varType}:${variable.name}`, variable])),
     asyncTasks: new Map(),
     resolving: new Set(),
+    coveredPipelines,
     options: resolvedOptions,
     push
   };
@@ -187,6 +190,109 @@ export function checkProgramTypes(program: Program, push: TypeDiagnosticPush, op
     const output = checkPipeline(resolver.pipeline, stateOf(graphqlResolverInputShape()), { ...ctx, asyncTasks: new Map(), resolving: new Set(ctx.resolving) });
     pushExitDebtDiagnostics(output, ctx, 'GraphQL field resolver');
   }
+
+  checkStandaloneNamedPipelines(ctx);
+}
+
+function checkStandaloneNamedPipelines(ctx: TypeContext): void {
+  const pipelines = ctx.program.pipelines || [];
+  if (!pipelines.length) return;
+
+  const referencedByNamedPipeline = collectNamedPipelineReferences(ctx);
+
+  for (const pipeline of pipelines) {
+    if (ctx.coveredPipelines.has(pipeline.name) || referencedByNamedPipeline.has(pipeline.name)) {
+      continue;
+    }
+    checkStandaloneNamedPipeline(pipeline, ctx);
+  }
+
+  for (const pipeline of pipelines) {
+    if (ctx.coveredPipelines.has(pipeline.name)) {
+      continue;
+    }
+    checkStandaloneNamedPipeline(pipeline, ctx);
+  }
+}
+
+function checkStandaloneNamedPipeline(pipeline: NamedPipeline, ctx: TypeContext): void {
+  ctx.coveredPipelines.add(pipeline.name);
+  const output = checkPipeline(pipeline.pipeline, stateOf(unknownShape), {
+    ...ctx,
+    asyncTasks: new Map(),
+    resolving: new Set([pipeline.name])
+  });
+  pushExitDebtDiagnostics(output, ctx, `pipeline '${pipeline.name}'`);
+}
+
+function collectNamedPipelineReferences(ctx: TypeContext): Set<string> {
+  const references = new Set<string>();
+  for (const pipeline of ctx.program.pipelines || []) {
+    collectPipelineReferences(pipeline.pipeline, ctx, references);
+  }
+  return references;
+}
+
+function collectPipelineReferences(pipeline: Pipeline, ctx: TypeContext, references: Set<string>): void {
+  for (const step of pipeline.steps || []) {
+    if (step.kind === 'Regular') {
+      const target = regularStepPipelineReference(step, ctx);
+      if (target) references.add(target);
+      if (step.name === 'loader' && step.hasConfig) {
+        const loaderTarget = findPipeline(ctx, step.config.trim());
+        if (loaderTarget) references.add(loaderTarget.name);
+      }
+      continue;
+    }
+
+    if (step.kind === 'Result') {
+      for (const branch of step.branches) {
+        collectPipelineReferences(branch.pipeline, ctx, references);
+      }
+      continue;
+    }
+
+    if (step.kind === 'If') {
+      collectPipelineReferences(step.condition, ctx, references);
+      collectPipelineReferences(step.thenBranch, ctx, references);
+      if (step.elseBranch) collectPipelineReferences(step.elseBranch, ctx, references);
+      continue;
+    }
+
+    if (step.kind === 'Dispatch') {
+      for (const branch of step.branches) {
+        collectPipelineReferences(branch.pipeline, ctx, references);
+      }
+      if (step.default) collectPipelineReferences(step.default, ctx, references);
+      continue;
+    }
+
+    if (step.kind === 'Foreach') {
+      collectPipelineReferences(step.pipeline, ctx, references);
+    }
+  }
+}
+
+function regularStepPipelineReference(step: Extract<PipelineStep, { kind: 'Regular' }>, ctx: TypeContext): string | undefined {
+  switch (step.name) {
+    case 'pipeline':
+      return step.hasConfig ? findPipeline(ctx, step.config.trim())?.name : undefined;
+    case 'jq':
+    case 'assert':
+    case 'validate':
+    case 'pg':
+    case 'fetch':
+    case 'graphql':
+    case 'auth':
+    case 'handlebars':
+    case 'lua':
+    case 'js':
+    case 'join':
+    case 'loader':
+      return undefined;
+    default:
+      return !step.hasConfig ? findPipeline(ctx, step.name)?.name : undefined;
+  }
 }
 
 function checkPipelineRef(ref: PipelineRef, input: PipelineTypeState, ctx: TypeContext): PipelineTypeState {
@@ -203,7 +309,8 @@ function checkNamedPipeline(name: string, input: PipelineTypeState, ctx: TypeCon
     ctx.push(DiagnosticSeverity.Error, start, end, `Unknown pipeline '${name}'`);
     return stateOf(unknownShape);
   }
-  if (ctx.resolving.has(name)) {
+  ctx.coveredPipelines.add(pipeline.name);
+  if (ctx.resolving.has(name) || ctx.resolving.has(pipeline.name)) {
     return stateOf(unknownShape);
   }
 
@@ -211,7 +318,7 @@ function checkNamedPipeline(name: string, input: PipelineTypeState, ctx: TypeCon
   const childCtx: TypeContext = {
     ...ctx,
     asyncTasks: new Map(ctx.asyncTasks),
-    resolving: new Set([...ctx.resolving, name]),
+    resolving: new Set([...ctx.resolving, name, pipeline.name]),
     push: (severity, diagnosticStart, diagnosticEnd, message) => {
       if (routeDiagnosticsToCallSite) {
         ctx.push(severity, start, end, `Pipeline '${name}' called here has type error: ${message}`);
@@ -2129,7 +2236,7 @@ function scanRootFieldAccesses(filter: string, minFieldCount = 2): Array<{ path:
     }
 
     const fieldCount = path.filter(segment => segment.kind === 'field').length;
-    if (fieldCount >= minFieldCount && !isNullAlternativeOperand(filter, start, j)) {
+    if (fieldCount >= minFieldCount && (fieldCount >= 2 || !isNullAlternativeOperand(filter, start, j))) {
       accesses.push({ path, start, end: j });
     }
     i = Math.max(i, j - 1);

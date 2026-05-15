@@ -303,6 +303,101 @@ GET /hello/:world
   );
 });
 
+test('standalone named pipelines are type checked after asserted shape materializes', () => {
+  const source = `
+assert Posts = \`{
+  posts: [{
+    id: number,
+    title: string,
+    body: string
+  }]
+}\`
+
+pipeline main =
+  |> fetch: "https://jsonplaceholder.typicode.com/posts"
+  |> jq: \`{ posts: .data.response }\`
+  |> assert: Posts
+  |> jq: \`.postsNonExistent | map({ id: .id, title: .title, body: .body })\`
+`;
+  const diagnostic = collectTypeDiagnosticDetails(source)
+    .find(item => item.message.includes('postsNonExistent'));
+
+  assert.ok(diagnostic);
+  assert.equal(source.slice(diagnostic.start, diagnostic.end), '.postsNonExistent');
+});
+
+test('standalone named pipeline pass skips pipelines already reached from routes', () => {
+  const messages = collectTypeDiagnostics(`
+assert Posts = \`{
+  posts: [{
+    id: number,
+    title: string,
+    body: string
+  }]
+}\`
+
+pipeline main =
+  |> fetch: "https://jsonplaceholder.typicode.com/posts"
+  |> jq: \`{ posts: .data.response }\`
+  |> assert: Posts
+  |> jq: \`.postsNonExistent | map({ id: .id, title: .title, body: .body })\`
+
+GET /
+  |> main
+`);
+
+  assert.equal(
+    messages.filter(message => message.includes('postsNonExistent')).length,
+    1
+  );
+});
+
+test('multi-field fallback operands are checked for missing root fields', () => {
+  const source = `
+assert CatalogState = \`{
+  missions: [{ id: string }]
+}\`
+
+jq missionSeed = \`{
+  missions: [{ id: "atlas" }]
+}\`
+
+pipeline catalog =
+  |> jq: missionSeed
+  |> assert: CatalogState
+
+pipeline selectMission =
+  |> jq: \`
+    if ((.errors // []) | length) > 0 then
+      { errors: .errors }
+    else
+      (.paramsNonExistant.id // .idNonExistant) as $id |
+      (.missionsNonExistant) as $missionsNonExistant |
+      ([$missions[] | select(.id == $id)][0]) as $mission |
+      { mission: $mission }
+    end
+  \`
+
+GET /missions/:id
+  |> catalog
+  |> selectMission
+`;
+  const messages = collectTypeDiagnostics(source, { mode: 'strict' });
+
+  assert.equal(
+    messages.some(message => message.includes('.paramsNonExistant.id')),
+    true
+  );
+  assert.equal(
+    messages.some(message => message.includes('missionsNonExistant')),
+    true
+  );
+  assert.equal(
+    messages.some(message => message.includes('$missions')),
+    true
+  );
+});
+
 test('handlebars diagnostics point at missing inline template properties', () => {
   const source = `
 GET /hello/:world
