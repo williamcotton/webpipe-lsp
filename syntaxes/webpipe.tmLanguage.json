@@ -466,7 +466,7 @@
     "middleware-step": {
       "patterns": [
         {
-          "begin": "\\s*(\\|>)\\s*(jq)",
+          "begin": "\\s*(\\|>)\\s*(jq)\\b",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.jq.webpipe" }
@@ -484,7 +484,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(lua)",
+          "begin": "\\s*(\\|>)\\s*(lua)\\b",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.lua.webpipe" }
@@ -502,7 +502,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(js)",
+          "begin": "\\s*(\\|>)\\s*(js)\\b",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.js.webpipe" }
@@ -520,7 +520,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(pg)",
+          "begin": "\\s*(\\|>)\\s*(pg)\\b",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.pg.webpipe" }
@@ -538,7 +538,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(fetch)",
+          "begin": "\\s*(\\|>)\\s*(fetch)\\b",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.fetch.webpipe" }
@@ -555,7 +555,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(mustache)",
+          "begin": "\\s*(\\|>)\\s*(mustache)\\b",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.mustache.webpipe" }
@@ -573,7 +573,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(handlebars)",
+          "begin": "\\s*(\\|>)\\s*(handlebars)\\b",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.handlebars.webpipe" }
@@ -591,7 +591,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(validate)",
+          "begin": "\\s*(\\|>)\\s*(validate)\\b",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.validate.webpipe" }
@@ -609,7 +609,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(assert)",
+          "begin": "\\s*(\\|>)\\s*(assert)\\b",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.assert.webpipe" }
@@ -627,7 +627,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(graphql)",
+          "begin": "\\s*(\\|>)\\s*(graphql)\\b",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.graphql.webpipe" }
@@ -645,7 +645,7 @@
           ]
         },
         {
-          "begin": "\\s*(\\|>)\\s*(join)",
+          "begin": "\\s*(\\|>)\\s*(join)\\b",
           "beginCaptures": {
             "1": { "name": "keyword.operator.pipe.webpipe" },
             "2": { "name": "entity.name.function.middleware.join.webpipe" }
