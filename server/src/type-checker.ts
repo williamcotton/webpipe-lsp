@@ -12,6 +12,8 @@ import type {
 import * as jqtypeModule from 'jqtype';
 import * as handlebarsParser from '@handlebars/parser';
 import type { AST as HandlebarsAst } from '@handlebars/parser';
+import { KNOWN_MIDDLEWARE } from './constants';
+import { getMiddlewareBranchableErrors } from './middleware-errors';
 
 export interface TypeDiagnosticPush {
   (severity: DiagnosticSeverity, start: number, end: number, message: string): void;
@@ -85,6 +87,17 @@ interface UnknownDebt {
 interface PipelineTypeState {
   shape: StageShape;
   debts: UnknownDebt[];
+}
+
+interface PendingErrorOrigin {
+  source: string;
+  start: number;
+  end: number;
+}
+
+interface PendingErrorFlow {
+  types: Map<string, PendingErrorOrigin>;
+  opaque: boolean;
 }
 
 interface JqFilterSource {
@@ -173,6 +186,8 @@ export function checkProgramTypes(program: Program, push: TypeDiagnosticPush, op
     push
   };
 
+  checkResultErrorSurfaces(ctx);
+
   for (const route of program.routes || []) {
     const output = checkPipelineRef(route.pipeline, routeInputState(route), ctx);
     pushExitDebtDiagnostics(output, ctx, 'route');
@@ -231,6 +246,321 @@ function collectNamedPipelineReferences(ctx: TypeContext): Set<string> {
     collectPipelineReferences(pipeline.pipeline, ctx, references);
   }
   return references;
+}
+
+class ResultErrorSurfaceAnalyzer {
+  private emittedDiagnostics = new Set<string>();
+
+  constructor(private readonly ctx: TypeContext) {}
+
+  checkProgram(): void {
+    for (const route of this.ctx.program.routes || []) {
+      this.checkPipelineRef(route.pipeline, emptyErrorFlow(), new Set());
+    }
+
+    for (const query of this.ctx.program.queries || []) {
+      this.checkPipeline(query.pipeline, emptyErrorFlow(), new Set());
+    }
+    for (const mutation of this.ctx.program.mutations || []) {
+      this.checkPipeline(mutation.pipeline, emptyErrorFlow(), new Set());
+    }
+    for (const resolver of this.ctx.program.resolvers || []) {
+      this.checkPipeline(resolver.pipeline, emptyErrorFlow(), new Set());
+    }
+
+    for (const pipeline of this.ctx.program.pipelines || []) {
+      this.checkPipeline(pipeline.pipeline, emptyErrorFlow(), new Set([pipeline.name]));
+    }
+  }
+
+  private checkPipelineRef(ref: PipelineRef, input: PendingErrorFlow, resolving: Set<string>): PendingErrorFlow {
+    if (ref.kind === 'Inline') {
+      return this.checkPipeline(ref.pipeline, input, resolving);
+    }
+    return this.checkNamedPipeline(ref.name, input, ref.start, ref.end, resolving);
+  }
+
+  private checkNamedPipeline(name: string, input: PendingErrorFlow, _start: number, _end: number, resolving: Set<string>): PendingErrorFlow {
+    const pipeline = findPipeline(this.ctx, name);
+    if (!pipeline) {
+      return emptyErrorFlow();
+    }
+    if (resolving.has(name) || resolving.has(pipeline.name)) {
+      return unknownErrorFlow();
+    }
+    return this.checkPipeline(
+      pipeline.pipeline,
+      cloneErrorFlow(input),
+      new Set([...resolving, name, pipeline.name])
+    );
+  }
+
+  private checkPipeline(pipeline: Pipeline, input: PendingErrorFlow, resolving: Set<string>): PendingErrorFlow {
+    let current = cloneErrorFlow(input);
+
+    for (const step of pipeline.steps || []) {
+      if (step.kind === 'Regular') {
+        current = mergeErrorFlows(current, this.stepErrorFlow(step, resolving));
+        continue;
+      }
+
+      if (step.kind === 'Result') {
+        return this.checkResultStep(step, current, resolving);
+      }
+
+      if (step.kind === 'If') {
+        const condition = this.checkPipeline(step.condition, current, resolving);
+        const thenBranch = this.checkPipeline(step.thenBranch, condition, resolving);
+        const elseBranch = step.elseBranch
+          ? this.checkPipeline(step.elseBranch, condition, resolving)
+          : condition;
+        current = mergeErrorFlows(thenBranch, elseBranch);
+        continue;
+      }
+
+      if (step.kind === 'Dispatch') {
+        const branchFlows = step.branches.map(branch =>
+          this.checkPipeline(branch.pipeline, current, resolving)
+        );
+        if (step.default) {
+          branchFlows.push(this.checkPipeline(step.default, current, resolving));
+        }
+        current = branchFlows.length > 0
+          ? mergeManyErrorFlows(branchFlows)
+          : current;
+        continue;
+      }
+
+      if (step.kind === 'Foreach') {
+        current = mergeErrorFlows(current, this.checkPipeline(step.pipeline, emptyErrorFlow(), resolving));
+      }
+    }
+
+    return current;
+  }
+
+  private stepErrorFlow(step: Extract<PipelineStep, { kind: 'Regular' }>, resolving: Set<string>): PendingErrorFlow {
+    if (getTagArg(step.condition, 'async')) {
+      return emptyErrorFlow();
+    }
+
+    const pipelineRef = regularStepPipelineReference(step, this.ctx);
+    let flow: PendingErrorFlow;
+
+    if (pipelineRef) {
+      flow = this.checkNamedPipeline(
+        pipelineRef,
+        emptyErrorFlow(),
+        step.configStart ?? step.nameStart,
+        step.configEnd ?? step.nameEnd,
+        resolving
+      );
+    } else {
+      const branchable = getMiddlewareBranchableErrors(step.name);
+      if (branchable) {
+        flow = flowFromErrorTypes(branchable, {
+          source: step.name,
+          start: step.nameStart,
+          end: step.nameEnd
+        });
+      } else if (KNOWN_MIDDLEWARE.has(step.name)) {
+        flow = emptyErrorFlow();
+      } else {
+        flow = unknownErrorFlow();
+      }
+    }
+
+    if (step.name === 'jq') {
+      flow = mergeErrorFlows(flow, this.jqOutputErrorFlow(step));
+    }
+
+    const override = getTagArg(step.condition, 'error');
+    if (!override) {
+      return flow;
+    }
+
+    if (flow.types.size > 0 || flow.opaque) {
+      return flowFromErrorTypes([override], {
+        source: `${step.name} @error(${override})`,
+        start: step.nameStart,
+        end: step.nameEnd
+      });
+    }
+
+    return flow;
+  }
+
+  private jqOutputErrorFlow(step: Extract<PipelineStep, { kind: 'Regular' }>): PendingErrorFlow {
+    const filter = resolveJqFilterSource(step, this.ctx);
+    if (!filter) {
+      return emptyErrorFlow();
+    }
+    const outputShape = inferJqOutputShape(filter.source, unknownShape);
+    return errorFlowFromOutputShape(outputShape, {
+      source: 'jq output',
+      start: step.nameStart,
+      end: step.nameEnd
+    });
+  }
+
+  private checkResultStep(step: Extract<PipelineStep, { kind: 'Result' }>, input: PendingErrorFlow, resolving: Set<string>): PendingErrorFlow {
+    const branchTypes = new Set<string>();
+    let hasDefault = false;
+    const pendingTypes = new Set(input.types.keys());
+
+    for (const branch of step.branches) {
+      if (branch.branchType.kind === 'Default') {
+        hasDefault = true;
+        continue;
+      }
+
+      if (branch.branchType.kind === 'Custom') {
+        branchTypes.add(branch.branchType.name);
+        if (!input.opaque && pendingTypes.size > 0 && !pendingTypes.has(branch.branchType.name)) {
+          const known = [...pendingTypes].sort().join(', ');
+          this.pushOnce(
+            DiagnosticSeverity.Warning,
+            branch.start,
+            branch.start + branch.branchType.name.length,
+            `Result branch '${branch.branchType.name}' does not match any error type produced before this result. Known errors here: ${known}.`
+          );
+        }
+      }
+    }
+
+    const missing = [...pendingTypes].filter(name => !branchTypes.has(name));
+    if (missing.length > 0 && !hasDefault) {
+      this.pushOnce(
+        this.exhaustivenessSeverity(),
+        step.start,
+        step.start + '|> result'.length,
+        `Result block is not exhaustive; missing branches for: ${missing.sort().join(', ')}. Add specific branches or default(status).`
+      );
+    }
+
+    if (input.opaque && !hasDefault) {
+      this.pushOnce(
+        DiagnosticSeverity.Warning,
+        step.start,
+        step.start + '|> result'.length,
+        'Result block may not be exhaustive because an upstream custom middleware has unknown error types. Add default(status) or tag the middleware with @error(name).'
+      );
+    }
+
+    const branchOutputs = step.branches.map(branch =>
+      this.checkPipeline(branch.pipeline, emptyErrorFlow(), resolving)
+    );
+    return branchOutputs.length > 0 ? mergeManyErrorFlows(branchOutputs) : emptyErrorFlow();
+  }
+
+  private exhaustivenessSeverity(): DiagnosticSeverity {
+    return this.ctx.options.mode === 'strict' ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning;
+  }
+
+  private pushOnce(severity: DiagnosticSeverity, start: number, end: number, message: string): void {
+    const key = `${severity}:${start}:${end}:${message}`;
+    if (this.emittedDiagnostics.has(key)) {
+      return;
+    }
+    this.emittedDiagnostics.add(key);
+    this.ctx.push(severity, start, end, message);
+  }
+}
+
+function checkResultErrorSurfaces(ctx: TypeContext): void {
+  new ResultErrorSurfaceAnalyzer(ctx).checkProgram();
+}
+
+function emptyErrorFlow(): PendingErrorFlow {
+  return { types: new Map(), opaque: false };
+}
+
+function unknownErrorFlow(): PendingErrorFlow {
+  return { types: new Map(), opaque: true };
+}
+
+function cloneErrorFlow(flow: PendingErrorFlow): PendingErrorFlow {
+  return { types: new Map(flow.types), opaque: flow.opaque };
+}
+
+function flowFromErrorTypes(types: readonly string[], origin: PendingErrorOrigin): PendingErrorFlow {
+  const flow = emptyErrorFlow();
+  for (const type of types) {
+    flow.types.set(type, origin);
+  }
+  return flow;
+}
+
+function mergeErrorFlows(left: PendingErrorFlow, right: PendingErrorFlow): PendingErrorFlow {
+  const merged = cloneErrorFlow(left);
+  for (const [name, origin] of right.types) {
+    if (!merged.types.has(name)) {
+      merged.types.set(name, origin);
+    }
+  }
+  merged.opaque = merged.opaque || right.opaque;
+  return merged;
+}
+
+function mergeManyErrorFlows(flows: PendingErrorFlow[]): PendingErrorFlow {
+  return flows.reduce((merged, flow) => mergeErrorFlows(merged, flow), emptyErrorFlow());
+}
+
+function errorFlowFromOutputShape(shape: StageShape, origin: PendingErrorOrigin): PendingErrorFlow {
+  const flow = emptyErrorFlow();
+
+  const visit = (candidate: StageShape): void => {
+    if (candidate.kind === 'union') {
+      for (const member of candidate.members) {
+        visit(member);
+      }
+      return;
+    }
+
+    if (candidate.kind !== 'object') {
+      return;
+    }
+
+    const errors = candidate.fields.errors?.shape;
+    if (!errors || errors.kind !== 'array') {
+      return;
+    }
+
+    const item = errors.item;
+    if (item.kind !== 'object') {
+      flow.opaque = true;
+      return;
+    }
+
+    const typeShape = item.fields.type?.shape;
+    if (!typeShape) {
+      flow.opaque = true;
+      return;
+    }
+
+    const literals = literalStringsFromShape(typeShape);
+    if (literals.length === 0) {
+      flow.opaque = true;
+      return;
+    }
+
+    for (const literal of literals) {
+      flow.types.set(literal, origin);
+    }
+  };
+
+  visit(shape);
+  return flow;
+}
+
+function literalStringsFromShape(shape: StageShape): string[] {
+  if (shape.kind === 'string' && shape.literal) {
+    return [shape.literal];
+  }
+  if (shape.kind === 'union') {
+    return shape.members.flatMap(literalStringsFromShape);
+  }
+  return [];
 }
 
 function collectPipelineReferences(pipeline: Pipeline, ctx: TypeContext, references: Set<string>): void {
@@ -1065,12 +1395,17 @@ function handlebarsContextShape(): StageShape {
 }
 
 function checkResultStep(step: Extract<PipelineStep, { kind: 'Result' }>, input: PipelineTypeState, ctx: TypeContext): PipelineTypeState {
+  const hasOkBranch = step.branches.some(branch => branch.branchType.kind === 'Ok');
   const branches = step.branches.map(branch => {
-    const body = checkPipeline({ ...branch.pipeline }, withShape(input, resultBranchInputShape(input.shape, branch.branchType)), { ...ctx, asyncTasks: new Map(ctx.asyncTasks) });
+    const body = checkPipeline(
+      { ...branch.pipeline },
+      withShape(input, resultBranchInputShape(input.shape, branch.branchType, hasOkBranch)),
+      { ...ctx, asyncTasks: new Map(ctx.asyncTasks) }
+    );
     return {
       shape: objectShape({
-      status: { shape: { kind: 'number', literal: branch.statusCode } },
-      body: { shape: body.shape }
+        status: { shape: { kind: 'number', literal: branch.statusCode } },
+        body: { shape: body.shape }
       }),
       debts: body.debts
     };
@@ -1346,11 +1681,11 @@ function graphqlResultShape(): StageShape {
   }, true);
 }
 
-function errorEnvelopeShape(errorType: string): StageShape {
+function errorEnvelopeShape(errorType?: string): StageShape {
   return objectShape({
     errors: {
       shape: arrayShape(objectShape({
-        type: { shape: { kind: 'string', literal: errorType } },
+        type: { shape: errorType ? { kind: 'string', literal: errorType } : stringShape },
         message: { shape: stringShape },
         field: { shape: stringShape, optional: true },
         context: { shape: stringShape, optional: true },
@@ -1366,7 +1701,7 @@ function errorEnvelopeShape(errorType: string): StageShape {
   }, false);
 }
 
-function resultBranchInputShape(input: StageShape, branchType: { kind: string; name?: string }): StageShape {
+function resultBranchInputShape(input: StageShape, branchType: { kind: string; name?: string }, hasOkBranch = false): StageShape {
   if (branchType.kind === 'Ok') {
     return narrowToOkShape(input);
   }
@@ -1374,10 +1709,14 @@ function resultBranchInputShape(input: StageShape, branchType: { kind: string; n
     const narrowed = narrowToErrorShape(input, branchType.name);
     return mergeErrorEnvelopeShape(narrowed, branchType.name);
   }
+  if (branchType.kind === 'Default') {
+    const errorShape = mergeErrorEnvelopeShape(input);
+    return hasOkBranch ? errorShape : unionShape([input, errorShape]);
+  }
   return input;
 }
 
-function mergeErrorEnvelopeShape(input: StageShape, errorType: string): StageShape {
+function mergeErrorEnvelopeShape(input: StageShape, errorType?: string): StageShape {
   const envelope = errorEnvelopeShape(errorType);
   if (input.kind === 'unknown') {
     return mergeObjectShapes(recordShape(unknownShape), envelope);

@@ -107,6 +107,120 @@ GET /signal/:city
   assert.equal(source.slice(diagnostic.start, diagnostic.end), '.cityNonExistant');
 });
 
+test('result default satisfies pending middleware error exhaustiveness', () => {
+  const messages = collectTypeDiagnostics(`
+GET /default-handles-pg-errors
+  |> pg: \`SELECT 1\`
+  |> result
+    sqlError(500):
+      |> jq: \`{ error: .errors[0].message }\`
+    default(500):
+      |> jq: \`{ error: "Something went wrong", message: .errors[0].message }\`
+`);
+
+  assert.equal(
+    messages.some(message => message.includes('Result block is not exhaustive')),
+    false
+  );
+  assert.equal(
+    messages.some(message => message.includes('.errors[0]')),
+    false
+  );
+});
+
+test('result branch typo is diagnosed even when default exists', () => {
+  const messages = collectTypeDiagnostics(`
+GET /typo-with-default
+  |> pg: \`SELECT 1\`
+  |> result
+    sqlErro(500):
+      |> jq: \`{ error: .errors[0].message }\`
+    default(500):
+      |> jq: \`{ error: "Something went wrong" }\`
+`);
+
+  assert.equal(
+    messages.some(message => message.includes("Result branch 'sqlErro' does not match any error type")),
+    true
+  );
+});
+
+test('result without default reports missing pending middleware errors', () => {
+  const messages = collectTypeDiagnostics(`
+GET /missing-pg-error-branch
+  |> pg: \`SELECT 1\`
+  |> result
+    sqlError(500):
+      |> jq: \`{ error: .errors[0].message }\`
+`);
+
+  assert.equal(
+    messages.some(message => message.includes('Result block is not exhaustive') && message.includes('pgError')),
+    true
+  );
+});
+
+test('@error defines the result branch name for a step', () => {
+  const messages = collectTypeDiagnostics(`
+GET /assert-alias
+  |> assert: \`{ method: string }\` @error(todoFetchError)
+  |> result
+    todoFetchError(500):
+      |> jq: \`{ error: .errors[0].message }\`
+    default(500):
+      |> jq: \`{ error: "Something went wrong" }\`
+`);
+
+  assert.equal(
+    messages.some(message => message.includes("Result branch 'todoFetchError' does not match any error type")),
+    false
+  );
+  assert.equal(
+    messages.some(message => message.includes('assertionError')),
+    false
+  );
+});
+
+test('jq-created error envelope defines a result branch name', () => {
+  const messages = collectTypeDiagnostics(`
+GET /jq-error-envelope
+  |> jq: \`{
+    errors: [{
+      type: "validationError",
+      field: "email",
+      message: "Email is required"
+    }]
+  }\`
+  |> result
+    validationError(400):
+      |> jq: \`{ field: .errors[0].field, message: .errors[0].message }\`
+    default(500):
+      |> jq: \`{ error: "Something went wrong", message: .errors[0].message }\`
+`);
+
+  assert.equal(
+    messages.some(message => message.includes("Result branch 'validationError' does not match any error type")),
+    false
+  );
+  assert.equal(
+    messages.some(message => message.includes('.errors[0]')),
+    false
+  );
+});
+
+test('strict mode escalates non-exhaustive result diagnostics', () => {
+  const diagnostic = collectTypeDiagnosticDetails(`
+GET /strict-missing-pg-error-branch
+  |> pg: \`SELECT 1\`
+  |> result
+    sqlError(500):
+      |> jq: \`{ error: .errors[0].message }\`
+`, { mode: 'strict' }).find(item => item.message.includes('Result block is not exhaustive'));
+
+  assert.ok(diagnostic);
+  assert.equal(diagnostic.severity, DiagnosticSeverity.Error);
+});
+
 test('GraphQL loader target pipelines are type checked', () => {
   const messages = collectTypeDiagnostics(`
 graphqlSchema = \`
