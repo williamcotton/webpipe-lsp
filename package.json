@@ -2,7 +2,7 @@
   "name": "webpipe-lsp",
   "displayName": "Web Pipe",
   "description": "Web Pipe",
-  "version": "2.0.91",
+  "version": "2.0.92",
   "publisher": "williamcotton",
   "author": {
     "name": "William Cotton",
@@ -65,6 +65,8 @@
           "meta.embedded.block.lua": "lua",
           "meta.embedded.block.js": "javascript",
           "meta.embedded.js.webpipe": "javascript",
+          "meta.embedded.algraf.webpipe": "algraf",
+          "source.algraf": "algraf",
           "meta.embedded.block.mustache": "mustache"
         }
       }
@@ -146,7 +148,7 @@
   },
   "dependencies": {
     "@handlebars/parser": "2.2.1",
-    "jqtype": "^0.10.0",
+    "jqtype": "^0.11.0",
     "vscode-languageclient": "^9.0.1",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.11",

@@ -328,6 +328,25 @@
           ]
         },
         {
+          "begin": "^\\s*(ag|algraf)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s*=\\s*`",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.middleware.webpipe"
+            },
+            "2": {
+              "name": "variable.other.assignment.webpipe"
+            }
+          },
+          "end": "`",
+          "name": "meta.variable-assignment.algraf.webpipe",
+          "contentName": "source.algraf",
+          "patterns": [
+            {
+              "include": "source.algraf"
+            }
+          ]
+        },
+        {
           "begin": "^\\s*(mustache)\\s+([a-zA-Z_][a-zA-Z0-9_-]*)\\s*=\\s*`",
           "beginCaptures": {
             "1": {
@@ -638,6 +657,24 @@
             { "begin": "\\[", "end": "\\]", "beginCaptures": { "0": { "name": "meta.brackets.webpipe" } }, "endCaptures": { "0": { "name": "meta.brackets.webpipe" } }, "patterns": [ { "include": "#jq-embedded" } ] },
             { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
             { "begin": "`", "end": "`", "name": "meta.embedded.graphql.webpipe", "contentName": "source.graphql", "patterns": [ { "include": "source.graphql" } ] },
+            { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
+            { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
+            { "include": "#tags" },
+            { "include": "#comments" }
+          ]
+        },
+        {
+          "begin": "\\s*(\\|>)\\s*(ag|algraf)\\b",
+          "beginCaptures": {
+            "1": { "name": "keyword.operator.pipe.webpipe" },
+            "2": { "name": "entity.name.function.middleware.algraf.webpipe" }
+          },
+          "end": "(?=$|\\s*\\|>|\\s*@)",
+          "patterns": [
+            { "begin": "\\(", "end": "\\)", "beginCaptures": { "0": { "name": "meta.parens.webpipe" } }, "endCaptures": { "0": { "name": "meta.parens.webpipe" } }, "patterns": [ { "include": "#jq-embedded" } ] },
+            { "begin": "\\[", "end": "\\]", "beginCaptures": { "0": { "name": "meta.brackets.webpipe" } }, "endCaptures": { "0": { "name": "meta.brackets.webpipe" } }, "patterns": [ { "include": "#jq-embedded" } ] },
+            { "match": ":", "name": "punctuation.separator.key-value.webpipe" },
+            { "begin": "`", "end": "`", "name": "meta.embedded.algraf.webpipe", "contentName": "source.algraf", "patterns": [ { "include": "source.algraf" } ] },
             { "begin": "\"", "end": "\"", "name": "string.quoted.double.webpipe" },
             { "match": "[a-zA-Z_][a-zA-Z0-9_-]*", "name": "variable.other.webpipe" },
             { "include": "#tags" },

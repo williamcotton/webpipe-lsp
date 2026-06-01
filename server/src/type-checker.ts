@@ -2525,6 +2525,18 @@ function findRequiredFieldMismatch(actual: StageShape, expected: StageShape, pat
   return undefined;
 }
 
+const SCOPED_JQ_FILTER_ARG_BUILTINS = new Set([
+  'group_by',
+  'map',
+  'max_by',
+  'min_by',
+  'select',
+  'sort_by',
+  'unique_by',
+  'walk',
+  'with_entries'
+]);
+
 function scanRootFieldAccesses(filter: string, minFieldCount = 2): Array<{ path: PathSegment[]; start: number; end: number }> {
   const accesses: Array<{ path: PathSegment[]; start: number; end: number }> = [];
   let inString = false;
@@ -2546,7 +2558,12 @@ function scanRootFieldAccesses(filter: string, minFieldCount = 2): Array<{ path:
       inString = true;
       continue;
     }
-    if (ch !== '.' || !isIdentStart(filter[i + 1]) || !isRootDot(filter, i)) {
+    if (
+      ch !== '.' ||
+      !isIdentStart(filter[i + 1]) ||
+      !isRootDot(filter, i) ||
+      isInsideScopedJqFilterArg(filter, i)
+    ) {
       continue;
     }
 
@@ -2582,6 +2599,55 @@ function scanRootFieldAccesses(filter: string, minFieldCount = 2): Array<{ path:
   }
 
   return accesses;
+}
+
+function isInsideScopedJqFilterArg(filter: string, dotIndex: number): boolean {
+  const callStack: Array<string | undefined> = [];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < dotIndex; i++) {
+    const ch = filter[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (isIdentStart(ch)) {
+      const nameStart = i;
+      i++;
+      while (i < dotIndex && isIdentContinue(filter[i])) i++;
+
+      let next = i;
+      while (next < dotIndex && /\s/.test(filter[next] || '')) next++;
+      if (filter[next] === '(') {
+        callStack.push(filter.slice(nameStart, i));
+        i = next;
+        continue;
+      }
+      i--;
+      continue;
+    }
+
+    if (ch === '(') {
+      callStack.push(undefined);
+    } else if (ch === ')') {
+      callStack.pop();
+    }
+  }
+
+  return callStack.some(name => name !== undefined && SCOPED_JQ_FILTER_ARG_BUILTINS.has(name));
 }
 
 function isRootDot(filter: string, dotIndex: number): boolean {

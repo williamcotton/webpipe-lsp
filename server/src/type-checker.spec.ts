@@ -339,6 +339,42 @@ GET /gql/user/:id/todos
   );
 });
 
+test('ag data jq callbacks do not treat item fields as root arguments', () => {
+  const messages = collectTypeDiagnostics(`
+jq weatherData = \`{
+  "hourly": {
+    "time": ["2026-01-09T00:00", "2026-01-09T01:00"],
+    "temperature_2m": [-4.2, -4.4]
+  }
+}\`
+
+GET /svg/weather-named-files
+  |> jq: weatherData
+  |> ag({
+    "type": "svg",
+    "data": {
+      "weather_labels.json": (
+        .hourly as $h
+        | (
+            [$h.time, $h.temperature_2m]
+            | transpose
+            | map({time: .[0], temp: .[1]})
+          ) as $points
+        | [
+            ($points | min_by(.temp) | . + {label: "Low"}),
+            ($points | max_by(.temp) | . + {label: "High"})
+          ]
+      )
+    }
+  }): \`Chart(data: "weather_labels.json") {}\`
+`);
+
+  assert.equal(
+    messages.some(message => message.includes('.temp may be missing') && message.includes('ag arguments')),
+    false
+  );
+});
+
 test('explicit resultName takes precedence over variable auto-naming', () => {
   const messages = collectTypeDiagnostics(`
 pg getUserInfo = \`SELECT 1 as id, 'Test User' as name\`
