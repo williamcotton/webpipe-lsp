@@ -7,6 +7,12 @@ export const middlewareErrorRegistry: Record<string, MiddlewareErrorSpec> = {
   assert: {
     branchable: ['assertionError', 'assertError']
   },
+  ag: {
+    branchable: ['agError']
+  },
+  algraf: {
+    branchable: ['algrafError']
+  },
   auth: {
     branchable: ['authError'],
     fatal: ['database_error', 'config_error']

@@ -1,7 +1,7 @@
 export const VALID_HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
 
 export const KNOWN_MIDDLEWARE = new Set([
-  'jq', 'pg', 'fetch', 'handlebars', 'lua', 'js', 'auth', 'cache', 'log', 'debug', 'validate', 'assert', 'graphql', 'rateLimit', 'gg', 'stdin'
+  'jq', 'pg', 'fetch', 'handlebars', 'lua', 'js', 'auth', 'cache', 'log', 'debug', 'validate', 'assert', 'graphql', 'rateLimit', 'gg', 'algraf', 'ag', 'stdin'
 ]);
 
 export const KNOWN_CONFIGS = new Set([
@@ -10,7 +10,7 @@ export const KNOWN_CONFIGS = new Set([
 ]);
 
 export const KNOWN_STEPS = new Set([
-  'jq', 'pg', 'fetch', 'handlebars', 'lua', 'js', 'auth', 'cache', 'log', 'debug', 'validate', 'assert', 'result', 'pipeline', 'join', 'graphql', 'rateLimit', 'loader', 'gg', 'stdin'
+  'jq', 'pg', 'fetch', 'handlebars', 'lua', 'js', 'auth', 'cache', 'log', 'debug', 'validate', 'assert', 'result', 'pipeline', 'join', 'graphql', 'rateLimit', 'loader', 'gg', 'algraf', 'ag', 'stdin'
 ]);
 
 export const VALID_AUTH_FLOWS = new Set(['optional', 'required', 'login', 'register', 'logout']);
